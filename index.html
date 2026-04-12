@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SA Bitcoin Tax</title>
+  <link rel="stylesheet" href="./css/styles.css">
+</head>
+<body>
+
+<div id="loading-screen">
+  <div class="spinner"></div>
+  <h2>SA Bitcoin Tax</h2>
+  <p id="loading-msg">Initialising…</p>
+</div>
+
+<div id="app" class="hidden">
+  <header>
+    <div class="header-brand">
+      <h1>SA Bitcoin Tax</h1>
+    </div>
+    <div class="header-right">
+      <button class="btn btn-ghost btn-sm" id="btn-show-welcome" title="About / Terms">?</button>
+    </div>
+  </header>
+
+  <div class="main-body">
+    <div id="sidebar">
+      <div class="sidebar-header">
+        <button class="btn btn-secondary btn-full btn-sm" id="btn-add-account">＋ Add Account</button>
+      </div>
+      <div class="sidebar-scroll" id="account-list"></div>
+      <div class="sidebar-prices">
+        <span id="prices-status"><span class="dot stale"></span>Loading prices…</span>
+        <div class="prices-btns">
+          <button class="btn btn-secondary btn-sm" id="btn-refresh-prices" title="Fetch missing price data">↻ Refresh</button>
+          <button class="btn btn-secondary btn-sm" id="btn-hard-refresh-prices" title="Clear and re-fetch all prices">⟳ Hard refresh</button>
+        </div>
+      </div>
+    </div>
+    <div id="detail">
+      <div class="empty-detail" id="empty-detail">
+        <div class="empty-icon">₿</div>
+        <p>Select a wallet to view tax details</p>
+      </div>
+      <div id="wallet-detail" class="hidden"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Welcome Modal -->
+<div class="overlay" id="overlay-welcome">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>Welcome to SA Bitcoin Tax</h2>
+    </div>
+    <div class="modal-body">
+      <p style="font-size:14px;line-height:1.7;color:var(--text-mid);margin-bottom:16px;">
+        This tool helps South African Bitcoin users calculate their disposal events
+        for tax reporting purposes. Connect your Blink wallet or upload a CSV of
+        transactions to get started.
+      </p>
+      <div class="terms-scroll">
+        <p><strong>Privacy:</strong> All data — API keys, transaction history, and price data — is stored exclusively in your browser using IndexedDB. Nothing is ever transmitted to any server other than directly to the services you connect (Blink, Binance, CoinGecko, Frankfurter/ECB).</p>
+        <p><strong>Disclaimer:</strong> This tool is for informational purposes only and does not constitute financial, tax, or legal advice. You are solely responsible for verifying all calculations and ensuring compliance with SARS requirements. Consult a qualified tax practitioner for advice specific to your situation.</p>
+        <p><strong>Accuracy:</strong> Tax calculations depend on price data from third-party sources. Prices may be incomplete or inaccurate. Always verify figures against official sources before submitting a tax return.</p>
+        <p><strong>Data loss:</strong> Clearing your browser data will permanently delete all stored accounts, transactions, and price history. Export or back up data before clearing browser storage.</p>
+        <p><strong>No warranty:</strong> This software is provided as-is, without any warranty of any kind. The authors accept no liability for any errors, omissions, or tax penalties arising from its use.</p>
+      </div>
+      <div class="checkbox-row">
+        <input type="checkbox" id="chk-agree">
+        <label for="chk-agree">I have read and agree to the terms above</label>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-primary" id="btn-continue" disabled>Continue →</button>
+    </div>
+  </div>
+</div>
+
+<!-- Add Account Modal -->
+<div class="overlay" id="overlay-add-account">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="add-modal-title">Add Account</h2>
+      <button class="modal-close" id="btn-close-add">✕</button>
+    </div>
+    <div class="modal-body" id="add-modal-body">
+      <!-- rendered by JS -->
+    </div>
+    <div class="modal-footer" id="add-modal-footer">
+      <!-- rendered by JS -->
+    </div>
+  </div>
+</div>
+
+<!-- Confirm Modal -->
+<div class="overlay" id="overlay-confirm">
+  <div class="modal" style="width:380px;">
+    <div class="modal-header">
+      <h2>Confirm</h2>
+    </div>
+    <div class="modal-body">
+      <p id="confirm-msg" style="font-size:14px;line-height:1.6;color:var(--text-mid);"></p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" id="btn-confirm-cancel">Cancel</button>
+      <button class="btn btn-danger" id="btn-confirm-ok">Confirm</button>
+    </div>
+  </div>
+</div>
+
+<script type="module" src="./js/app.js?v=2"></script>
+</body>
+</html>
