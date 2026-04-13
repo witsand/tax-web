@@ -343,10 +343,6 @@ async function refreshTaxResults(wallet) {
   const contentEl = document.getElementById('tax-content');
   if (!taxEl) return;
 
-  // Preserve filter values across re-renders
-  const fromVal = document.getElementById('inp-from')?.value ?? taxEl.dataset.defaultFrom ?? dateStr(taxYearStart(taxYear(now())));
-  const toVal   = document.getElementById('inp-to')?.value   ?? taxEl.dataset.defaultTo   ?? dateStr(now());
-
   loadingEl.classList.remove('hidden');
   errorEl.classList.add('hidden');
   contentEl.classList.add('hidden');
@@ -370,16 +366,42 @@ async function refreshTaxResults(wallet) {
   const summary      = summariseByYear(allDisposals, sm);
   const years        = Object.keys(summary).map(Number).sort();
 
-  // Disposals table filtered by From/To
-  const fromTs  = dateToTs(fromVal);
-  const toTs    = dateToTs(toVal) + 86399;
-  const inRange = allDisposals.filter(d => d.time >= fromTs && d.time <= toTs).reverse();
+  // Lot status for receive tx coloring (txID → { original, remaining })
+  const lotStatusMap = {};
+  for (const tx of Object.values(result.txMap)) {
+    if (tx.amount > 0) lotStatusMap[tx.id] = { original: tx.amount - tx.fee, remaining: 0 };
+  }
+  for (const lot of result.remainingLots) {
+    if (lotStatusMap[lot.txID]) lotStatusMap[lot.txID].remaining = lot.units;
+  }
+
+  // Acquisition price per receive tx (costPerUnit at time of receive)
+  const acqCpu = {};
+  for (const lot of result.remainingLots) {
+    if (lot.txID !== 'ACB') acqCpu[lot.txID] = lot.costPerUnit;
+  }
+  for (const d of allDisposals) {
+    for (const s of d.sources) {
+      if (s.txID !== 'ACB' && !acqCpu[s.txID]) acqCpu[s.txID] = s.costPerUnit;
+    }
+  }
+
+  // Outflow disposal by txID
+  const disposalMap = {};
+  for (const d of allDisposals) {
+    if (d.amount > 0) disposalMap[d.txID] = d;
+  }
+
+  // All txs sorted newest-first, with slider defaults
+  const allTxsSorted = Object.values(result.txMap).sort((a, b) => b.time - a.time);
+  const minTsAll  = allTxsSorted.length ? allTxsSorted[allTxsSorted.length - 1].time : now();
+  const maxTsAll  = now();
+  const initMinTs = allTxsSorted.length > 5 ? allTxsSorted[4].time : minTsAll;
 
   const monthOptions = MONTHS.map((m, i) =>
     `<option value="${i}"${i === sm ? ' selected' : ''}>${m}</option>`
   ).join('');
 
-  const PAGE_SIZE = 5;
   const monthByYear = summariseByMonth(allDisposals, sm);
 
   contentEl.innerHTML = `
@@ -457,96 +479,26 @@ async function refreshTaxResults(wallet) {
     </div>` : ''}
 
     <div class="card" style="margin-top:12px">
-      <div class="card-header">
-        <span class="card-title">Spending</span>
-        <span style="display:flex;align-items:center;gap:8px">
-          <span style="font-size:12px;color:var(--text-muted)">From</span>
-          <span class="date-picker-wrap">
-            <input type="text" id="inp-from" value="${fromVal}" placeholder="yyyy-mm-dd" maxlength="10">
-            <input type="date" class="date-picker-native" value="${fromVal}" tabindex="-1">
-            <button class="date-picker-btn" tabindex="-1">📅</button>
-          </span>
-          <span style="font-size:12px;color:var(--text-muted)">To</span>
-          <span class="date-picker-wrap">
-            <input type="text" id="inp-to" value="${toVal}" placeholder="yyyy-mm-dd" maxlength="10">
-            <input type="date" class="date-picker-native" value="${toVal}" tabindex="-1">
-            <button class="date-picker-btn" tabindex="-1">📅</button>
-          </span>
-        </span>
+      <div class="card-header" style="flex-wrap:wrap;gap:8px">
+        <span class="card-title">Transactions</span>
+        <div class="tx-toggles">
+          <button class="tog-btn active" data-tog="receives">Receives</button>
+          <button class="tog-btn active" data-tog="spending">Spending</button>
+          <button class="tog-btn active" data-tog="available">Available only</button>
+        </div>
       </div>
-      <div class="card-body">
-        ${inRange.length ? `
-        <table>
-          <thead><tr>
-            <th style="width:28px"></th>
-            <th>Date</th>
-            <th class="num">${wallet.currency === 'BTC' ? 'Sats' : 'Amount'}</th>
-            <th class="num">ZAR</th>
-            <th class="num">Fee</th>
-          </tr></thead>
-          <tbody id="disposals-tbody">
-            ${inRange.map((d, i) => {
-              const { proceeds, cost, gain } = disposalGain(d);
-              const feeZar = d.fee * d.proceedsPerUnit;
-              const sourceRows = d.sources.map(s => {
-                const acqTx    = result.txMap[s.txID];
-                const acqDate  = acqTx ? dateStr(acqTx.time) : '–';
-                const lotTotal = acqTx ? nativeAmt(Math.abs(acqTx.amount), wallet.currency) : '–';
-                const used     = nativeAmt(s.amount, wallet.currency);
-                const rate     = wallet.currency === 'BTC'
-                  ? `${(s.costPerUnit * 100).toFixed(4)}c / sat`
-                  : `R ${(s.costPerUnit * 100).toLocaleString('en-ZA', { maximumFractionDigits: 4 })} / USD`;
-                return `<tr class="lot-row">
-                  <td></td>
-                  <td class="muted" style="font-size:11px;padding-left:32px">${acqDate}</td>
-                  <td style="font-size:11px;color:var(--text-muted);font-family:monospace;word-break:break-all">${s.txID}</td>
-                  <td class="num" style="font-size:11px" title="Total lot size">${lotTotal}</td>
-                  <td class="num" style="font-size:11px" title="Used in this disposal">${used}</td>
-                  <td class="num" style="font-size:11px">${rate}</td>
-                </tr>`;
-              }).join('');
-              const cols  = 5;
-              const extra = i >= PAGE_SIZE ? ' disposal-extra hidden' : '';
-              return `<tr class="disposal-row${extra}" data-idx="${i}" style="cursor:pointer">
-                <td style="color:var(--text-muted);font-size:11px;text-align:center">▶</td>
-                <td class="muted">${dateStr(d.time)}</td>
-                <td class="num">${d.amount > 0 ? nativeAmt(d.amount, wallet.currency) : '–'}</td>
-                <td class="num">${ZAR(proceeds)}</td>
-                <td class="num muted">${feeZar > 0 ? ZAR(feeZar) : '–'}</td>
-              </tr>
-              <tr class="lot-group hidden" data-group="${i}">
-                <td colspan="${cols}" style="padding:0;background:var(--bg)">
-                  <table style="width:100%;border-collapse:collapse">
-                    <thead>
-                      <tr style="background:var(--bg);border-bottom:1px solid var(--border)">
-                        <td colspan="6" style="padding:8px 14px 6px 14px">
-                          <span style="font-size:12px;color:var(--text-muted);font-family:monospace">${d.txID}</span>
-                          <span style="font-size:12px;color:var(--text-mid);margin-left:16px">Cost Basis: <strong>${ZAR(cost)}</strong></span>
-                          <span style="font-size:12px;color:var(--text-mid);margin-left:16px">Gain / Loss: <strong class="${gain >= 0 ? 'gain-val' : 'loss-val'}">${ZAR(gain)}</strong></span>
-                        </td>
-                      </tr>
-                      <tr style="background:var(--bg)">
-                        <th style="width:28px"></th>
-                        <th style="padding:5px 14px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);text-align:left">Acquired</th>
-                        <th style="padding:5px 14px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);text-align:left">Tx ID</th>
-                        <th style="padding:5px 14px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);text-align:right">Lot Total</th>
-                        <th style="padding:5px 14px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);text-align:right">Used</th>
-                        <th style="padding:5px 14px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);text-align:right">Acquired Rate</th>
-                      </tr>
-                    </thead>
-                    <tbody>${sourceRows}</tbody>
-                  </table>
-                </td>
-              </tr>`;
-            }).join('')}
-          </tbody>
-        </table>
-        ${inRange.length > PAGE_SIZE ? `
-        <div style="padding:10px 14px;border-top:1px solid var(--border)">
-          <button id="btn-show-more" class="btn btn-secondary btn-sm">Show ${inRange.length - PAGE_SIZE} more</button>
-        </div>` : ''}
-        ` : `<div style="padding:24px;text-align:center;color:var(--text-muted)">No disposals in selected date range.</div>`}
+      <div class="tx-slider-wrap">
+        <div class="dual-slider" id="dual-slider">
+          <div class="dual-slider-track"><div class="dual-slider-fill" id="ds-fill"></div></div>
+          <input type="range" id="ds-min" class="ds-handle" min="${minTsAll}" max="${maxTsAll}" value="${initMinTs}" step="1">
+          <input type="range" id="ds-max" class="ds-handle" min="${minTsAll}" max="${maxTsAll}" value="${maxTsAll}" step="1">
+        </div>
+        <div class="dual-slider-labels">
+          <span id="ds-label-min">${dateStr(initMinTs)}</span>
+          <span id="ds-label-max">Today</span>
+        </div>
       </div>
+      <div class="card-body"><div id="tx-table-wrap"></div></div>
     </div>
 
     `;
@@ -558,37 +510,6 @@ async function refreshTaxResults(wallet) {
     wallet.taxYearStartMonth = parseInt(e.target.value, 10);
     await db.put('wallets', wallet);
     await refreshTaxResults(wallet);
-  });
-
-  // Show more / show all (Spending card)
-  contentEl.querySelector('#btn-show-more')?.addEventListener('click', e => {
-    contentEl.querySelectorAll('.disposal-extra').forEach(r => r.classList.remove('hidden'));
-    e.target.closest('div').remove();
-  });
-
-  // Disposal date filters
-  const isValidDate = v => /^\d{4}-\d{2}-\d{2}$/.test(v) && !isNaN(Date.parse(v));
-
-  ['inp-from', 'inp-to'].forEach(id => {
-    const text   = contentEl.querySelector(`#${id}`);
-    if (!text) return;
-    const wrap   = text.closest('.date-picker-wrap');
-    const native = wrap.querySelector('.date-picker-native');
-    const btn    = wrap.querySelector('.date-picker-btn');
-
-    btn.addEventListener('click', () => native.showPicker?.() ?? native.click());
-
-    native.addEventListener('change', () => {
-      text.value = native.value;
-      text.style.borderColor = '';
-      refreshTaxResults(wallet);
-    });
-
-    text.addEventListener('change', () => {
-      const valid = isValidDate(text.value);
-      text.style.borderColor = valid ? '' : 'var(--loss)';
-      if (valid) { native.value = text.value; refreshTaxResults(wallet); }
-    });
   });
 
   // Year expand/collapse
@@ -616,8 +537,8 @@ async function refreshTaxResults(wallet) {
     });
   });
 
-  // Expand/collapse disposal rows (Spending card + all month expansion tables)
-  contentEl.querySelectorAll('.disposal-row').forEach(row => {
+  // Disposal expand/collapse in yearly summary tables (TX table manages its own)
+  contentEl.querySelectorAll('.year-months-row .disposal-row').forEach(row => {
     row.addEventListener('click', e => {
       e.stopPropagation();
       const idx   = row.dataset.idx;
@@ -628,6 +549,185 @@ async function refreshTaxResults(wallet) {
       arrow.textContent = open ? '▶' : '▼';
     });
   });
+
+  // ── Transactions table ────────────────────────────────────────────────────────
+
+  const txState = { minTs: initMinTs, maxTs: maxTsAll, receives: true, spending: true, available: true };
+
+  function getFilteredTxs() {
+    return allTxsSorted.filter(tx => {
+      if (tx.time < txState.minTs || tx.time > txState.maxTs) return false;
+      const recv = tx.amount > 0;
+      if (!txState.receives && recv)  return false;
+      if (!txState.spending && !recv) return false;
+      if (txState.available && recv && !(lotStatusMap[tx.id]?.remaining > 0)) return false;
+      return true;
+    });
+  }
+
+  function renderTxRow(tx, idx) {
+    const recv = tx.amount > 0;
+    if (recv) {
+      const lot  = lotStatusMap[tx.id];
+      const orig = lot?.original ?? tx.amount;
+      const rem  = lot?.remaining ?? 0;
+      const fullyUnspent = orig > 0 && rem >= orig;
+      const fullySpent   = rem === 0;
+      const rowCls = fullyUnspent ? 'tx-unspent' : fullySpent ? 'tx-spent' : 'tx-partial';
+      const amtCls = fullyUnspent ? 'gain-val' : fullySpent ? 'loss-val' : 'partial-val';
+      const cpu    = acqCpu[tx.id] ?? 0;
+      const feeZar = tx.fee * cpu;
+      const remDisplay = fullyUnspent ? '–' : nativeAmt(rem, wallet.currency);
+      return `<tr class="${rowCls}">
+        <td></td>
+        <td class="muted">${dateStr(tx.time)}</td>
+        <td class="num ${amtCls}">+${nativeAmt(tx.amount, wallet.currency)}</td>
+        <td class="num">${cpu ? ZAR(tx.amount * cpu) : '–'}</td>
+        <td class="num muted">${feeZar > 0 ? ZAR(feeZar) : '–'}</td>
+        <td class="num ${amtCls}">${remDisplay}</td>
+      </tr>`;
+    } else {
+      const d   = disposalMap[tx.id];
+      const amt = nativeAmt(-tx.amount, wallet.currency);
+      if (!d) return `<tr>
+        <td></td><td class="muted">${dateStr(tx.time)}</td>
+        <td class="num loss-val">-${amt}</td>
+        <td class="num muted">–</td><td class="num muted">–</td><td class="num muted">–</td>
+      </tr>`;
+      const { proceeds, cost, gain } = disposalGain(d);
+      const feeZar = d.fee * d.proceedsPerUnit;
+      const srcRows = d.sources.map(s => {
+        const acqTx    = result.txMap[s.txID];
+        const acqDate  = acqTx ? dateStr(acqTx.time) : '–';
+        const lotTotal = acqTx ? nativeAmt(Math.abs(acqTx.amount), wallet.currency) : '–';
+        const used     = nativeAmt(s.amount, wallet.currency);
+        const rate     = wallet.currency === 'BTC'
+          ? `${(s.costPerUnit * 100).toFixed(4)}c / sat`
+          : `R ${(s.costPerUnit * 100).toLocaleString('en-ZA', { maximumFractionDigits: 4 })} / USD`;
+        return `<tr class="lot-row">
+          <td></td>
+          <td class="muted" style="font-size:11px;padding-left:32px">${acqDate}</td>
+          <td style="font-size:11px;color:var(--text-muted);font-family:monospace;word-break:break-all">${s.txID}</td>
+          <td class="num" style="font-size:11px">${lotTotal}</td>
+          <td class="num" style="font-size:11px">${used}</td>
+          <td class="num" style="font-size:11px">${rate}</td>
+        </tr>`;
+      }).join('');
+      return `<tr class="disposal-row" data-idx="${idx}" style="cursor:pointer">
+        <td style="color:var(--text-muted);font-size:11px;text-align:center">▶</td>
+        <td class="muted">${dateStr(tx.time)}</td>
+        <td class="num loss-val">-${amt}</td>
+        <td class="num">${ZAR(proceeds)}</td>
+        <td class="num muted">${feeZar > 0 ? ZAR(feeZar) : '–'}</td>
+        <td class="num muted">–</td>
+      </tr>
+      <tr class="lot-group hidden" data-group="${idx}">
+        <td colspan="6" style="padding:0;background:var(--bg)">
+          <table style="width:100%;border-collapse:collapse">
+            <thead>
+              <tr style="background:var(--bg);border-bottom:1px solid var(--border)">
+                <td colspan="6" style="padding:8px 14px 6px 14px">
+                  <span style="font-size:12px;color:var(--text-muted);font-family:monospace">${d.txID}</span>
+                  <span style="font-size:12px;color:var(--text-mid);margin-left:16px">Cost Basis: <strong>${ZAR(cost)}</strong></span>
+                  <span style="font-size:12px;color:var(--text-mid);margin-left:16px">Gain / Loss: <strong class="${gain >= 0 ? 'gain-val' : 'loss-val'}">${ZAR(gain)}</strong></span>
+                </td>
+              </tr>
+              <tr style="background:var(--bg)">
+                <th style="width:28px"></th>
+                <th style="padding:5px 14px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);text-align:left">Acquired</th>
+                <th style="padding:5px 14px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);text-align:left">Tx ID</th>
+                <th style="padding:5px 14px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);text-align:right">Lot Total</th>
+                <th style="padding:5px 14px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);text-align:right">Used</th>
+                <th style="padding:5px 14px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);text-align:right">Rate</th>
+              </tr>
+            </thead>
+            <tbody>${srcRows}</tbody>
+          </table>
+        </td>
+      </tr>`;
+    }
+  }
+
+  function buildTxTableHTML(txs) {
+    if (!txs.length) return `<div style="padding:24px;text-align:center;color:var(--text-muted)">No transactions in range.</div>`;
+    const amtHdr = wallet.currency === 'BTC' ? 'Sats' : 'Amount';
+    return `<table><thead><tr>
+        <th style="width:28px"></th>
+        <th>Date</th>
+        <th class="num">${amtHdr}</th>
+        <th class="num">ZAR</th>
+        <th class="num">Fee</th>
+        <th class="num">Remaining</th>
+      </tr></thead>
+      <tbody>${txs.map((tx, i) => renderTxRow(tx, i)).join('')}</tbody>
+    </table>`;
+  }
+
+  function updateSliderFill() {
+    const fillEl   = contentEl.querySelector('#ds-fill');
+    const labelMin = contentEl.querySelector('#ds-label-min');
+    const labelMax = contentEl.querySelector('#ds-label-max');
+    if (!fillEl) return;
+    const range    = maxTsAll - minTsAll || 1;
+    const leftPct  = ((txState.minTs - minTsAll) / range) * 100;
+    const widthPct = ((txState.maxTs - txState.minTs) / range) * 100;
+    fillEl.style.left  = Math.max(0, leftPct) + '%';
+    fillEl.style.width = Math.max(0, widthPct) + '%';
+    if (labelMin) labelMin.textContent = dateStr(txState.minTs);
+    if (labelMax) labelMax.textContent = txState.maxTs >= maxTsAll - 86400 ? 'Today' : dateStr(txState.maxTs);
+  }
+
+  function updateTxTable() {
+    const wrap = contentEl.querySelector('#tx-table-wrap');
+    if (!wrap) return;
+    wrap.innerHTML = buildTxTableHTML(getFilteredTxs());
+    wrap.querySelectorAll('.disposal-row').forEach(row => {
+      row.addEventListener('click', e => {
+        e.stopPropagation();
+        const idx   = row.dataset.idx;
+        const group = row.closest('tbody').querySelector(`.lot-group[data-group="${idx}"]`);
+        const arrow = row.querySelector('td:first-child');
+        const open  = !group.classList.contains('hidden');
+        group.classList.toggle('hidden', open);
+        arrow.textContent = open ? '▶' : '▼';
+      });
+    });
+  }
+
+  // Dual slider
+  const dsMin = contentEl.querySelector('#ds-min');
+  const dsMax = contentEl.querySelector('#ds-max');
+  if (dsMin && dsMax) {
+    const onSlider = function() {
+      let lo = parseInt(dsMin.value), hi = parseInt(dsMax.value);
+      if (lo > hi) {
+        if (this === dsMin) { lo = hi; dsMin.value = lo; }
+        else                { hi = lo; dsMax.value = hi; }
+      }
+      txState.minTs = lo;
+      txState.maxTs = hi;
+      updateSliderFill();
+      updateTxTable();
+    };
+    dsMin.addEventListener('input', onSlider);
+    dsMax.addEventListener('input', onSlider);
+  }
+
+  // Toggles
+  contentEl.querySelectorAll('.tog-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const tog    = btn.dataset.tog;
+      const active = btn.classList.toggle('active');
+      if (tog === 'receives')  txState.receives  = active;
+      else if (tog === 'spending')  txState.spending  = active;
+      else if (tog === 'available') txState.available = active;
+      updateTxTable();
+    });
+  });
+
+  // Initial render
+  updateSliderFill();
+  updateTxTable();
 }
 
 // ── Add Account Modal ──────────────────────────────────────────────────────────
