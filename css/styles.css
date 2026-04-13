@@ -405,7 +405,7 @@ td.muted { color: var(--text-muted); font-size: 12px; }
   /* Make tables horizontally scrollable */
   .card { overflow-x: auto; }
 
-  /* Hide Count column in Yearly Summary */
-  .tbl-yearly th:nth-child(2),
-  .tbl-yearly td:nth-child(2) { display: none; }
+  /* Hide Count column in Yearly Summary (direct rows only, not nested disposal/lot tables) */
+  .tbl-yearly > thead > tr > th:nth-child(2),
+  .tbl-yearly > tbody > tr > td:nth-child(2) { display: none; }
 }

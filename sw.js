@@ -1,7 +1,7 @@
 // Service Worker — ClearSats
 // Cache-first strategy for app shell; network-first for API calls.
 
-const CACHE = 'clearsats-v7';
+const CACHE = 'clearsats-v8';
 
 const APP_SHELL = [
   '/',
