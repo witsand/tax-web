@@ -187,6 +187,15 @@ td.muted { color: var(--text-muted); font-size: 12px; }
 .gain-val { color: var(--gain); font-weight: 600; }
 .loss-val { color: var(--loss); font-weight: 600; }
 .year-label { font-family: Georgia, serif; font-weight: 700; font-size: 13px; }
+.year-row:hover { background: var(--blue-light) !important; }
+.year-row td:first-child { color: var(--navy); }
+.year-months-row > td { padding: 0 !important; }
+.year-months-row table { border-top: none; margin: 0; }
+.year-months-row tbody tr { background: var(--bg) !important; }
+.year-months-row tbody tr:hover { background: #e8edf5 !important; }
+.year-months-row .month-row td:first-child { font-size: 12px; color: var(--text-mid); font-weight: 600; }
+.year-months-row .month-disposals-row > td { padding: 0 !important; background: var(--surface) !important; }
+.year-months-row .month-disposals-row table thead th { top: auto; }
 .type-sell { background: #eff6ff; color: #1d4ed8; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 10px; letter-spacing: .3px; }
 .type-fee  { background: #f5f3ff; color: #6d28d9; font-size: 11px; font-weight: 600; padding: 2px 7px; border-radius: 10px; letter-spacing: .3px; }
 

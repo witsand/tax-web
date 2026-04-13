@@ -185,6 +185,90 @@ function summariseByYear(disposals, sm) {
   return years;
 }
 
+function summariseByMonth(disposals, sm) {
+  const data = {};
+  for (const d of disposals) {
+    const y  = taxYear(d.time, sm);
+    const mo = new Date(d.time * 1000).getUTCMonth();
+    const yr = (data[y] ??= {});
+    const mn = (yr[mo] ??= { proceeds: 0, cost: 0, gain: 0, fees: 0, count: 0, disposals: [] });
+    const { proceeds, cost, gain } = disposalGain(d);
+    mn.proceeds += proceeds;
+    mn.cost     += cost;
+    mn.gain     += gain;
+    mn.fees     += d.fee * d.proceedsPerUnit;
+    mn.count++;
+    mn.disposals.push(d);
+  }
+  return data;
+}
+
+function renderDisposalTable(disposals, wallet, result) {
+  const rows = [...disposals].reverse().map((d, i) => {
+    const { proceeds, cost, gain } = disposalGain(d);
+    const feeZar    = d.fee * d.proceedsPerUnit;
+    const sourceRows = d.sources.map(s => {
+      const acqTx   = result.txMap[s.txID];
+      const acqDate = acqTx ? dateStr(acqTx.time) : '–';
+      const lotTotal = acqTx ? nativeAmt(Math.abs(acqTx.amount), wallet.currency) : '–';
+      const used    = nativeAmt(s.amount, wallet.currency);
+      const rate    = wallet.currency === 'BTC'
+        ? `${(s.costPerUnit * 100).toFixed(4)}c / sat`
+        : `R ${(s.costPerUnit * 100).toLocaleString('en-ZA', { maximumFractionDigits: 4 })} / USD`;
+      return `<tr class="lot-row">
+        <td></td>
+        <td class="muted" style="font-size:11px;padding-left:32px">${acqDate}</td>
+        <td style="font-size:11px;color:var(--text-muted);font-family:monospace;word-break:break-all">${s.txID}</td>
+        <td class="num" style="font-size:11px" title="Total lot size">${lotTotal}</td>
+        <td class="num" style="font-size:11px" title="Used in this disposal">${used}</td>
+        <td class="num" style="font-size:11px">${rate}</td>
+      </tr>`;
+    }).join('');
+    return `<tr class="disposal-row" data-idx="${i}" style="cursor:pointer">
+        <td style="color:var(--text-muted);font-size:11px;text-align:center">▶</td>
+        <td class="muted">${dateStr(d.time)}</td>
+        <td class="num">${d.amount > 0 ? nativeAmt(d.amount, wallet.currency) : '–'}</td>
+        <td class="num">${ZAR(proceeds)}</td>
+        <td class="num muted">${feeZar > 0 ? ZAR(feeZar) : '–'}</td>
+      </tr>
+      <tr class="lot-group hidden" data-group="${i}">
+        <td colspan="5" style="padding:0;background:var(--bg)">
+          <table style="width:100%;border-collapse:collapse">
+            <thead>
+              <tr style="background:var(--bg);border-bottom:1px solid var(--border)">
+                <td colspan="6" style="padding:8px 14px 6px 14px">
+                  <span style="font-size:12px;color:var(--text-muted);font-family:monospace">${d.txID}</span>
+                  <span style="font-size:12px;color:var(--text-mid);margin-left:16px">Cost Basis: <strong>${ZAR(cost)}</strong></span>
+                  <span style="font-size:12px;color:var(--text-mid);margin-left:16px">Gain / Loss: <strong class="${gain >= 0 ? 'gain-val' : 'loss-val'}">${ZAR(gain)}</strong></span>
+                </td>
+              </tr>
+              <tr style="background:var(--bg)">
+                <th style="width:28px"></th>
+                <th style="padding:5px 14px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);text-align:left">Acquired</th>
+                <th style="padding:5px 14px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);text-align:left">Tx ID</th>
+                <th style="padding:5px 14px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);text-align:right">Lot Total</th>
+                <th style="padding:5px 14px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);text-align:right">Used</th>
+                <th style="padding:5px 14px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--text-muted);text-align:right">Acquired Rate</th>
+              </tr>
+            </thead>
+            <tbody>${sourceRows}</tbody>
+          </table>
+        </td>
+      </tr>`;
+  }).join('');
+
+  return `<table style="width:100%;border-collapse:collapse">
+    <thead><tr>
+      <th style="width:28px"></th>
+      <th>Date</th>
+      <th class="num">${wallet.currency === 'BTC' ? 'Sats' : 'Amount'}</th>
+      <th class="num">ZAR</th>
+      <th class="num">Fee</th>
+    </tr></thead>
+    <tbody>${rows}</tbody>
+  </table>`;
+}
+
 // ── Rendering ──────────────────────────────────────────────────────────────────
 
 function renderAccountList() {
@@ -296,6 +380,7 @@ async function refreshTaxResults(wallet) {
   ).join('');
 
   const PAGE_SIZE = 5;
+  const monthByYear = summariseByMonth(allDisposals, sm);
 
   contentEl.innerHTML = `
     ${result.warnings.length ? `
@@ -327,14 +412,43 @@ async function refreshTaxResults(wallet) {
           </tr></thead>
           <tbody>
             ${years.map(y => {
-              const r = summary[y];
-              return `<tr>
-                <td><span class="year-label">${taxYearLabel(y)}</span></td>
+              const r  = summary[y];
+              const mos = Object.keys(monthByYear[y] ?? {}).map(Number).sort((a, b) => {
+                // Sort months in chronological order within the tax year
+                const adjA = a < sm ? a + 12 : a;
+                const adjB = b < sm ? b + 12 : b;
+                return adjA - adjB;
+              });
+              const monthRows = mos.map(mo => {
+                const mr = monthByYear[y][mo];
+                return `<tr class="month-row" data-year="${y}" data-month="${mo}" style="cursor:pointer">
+                  <td style="padding-left:32px"><span class="expand-arrow" style="font-size:10px;color:var(--text-muted);margin-right:6px">▶</span>${MONTHS[mo]}</td>
+                  <td class="num muted">${mr.count}</td>
+                  <td class="num">${ZAR(mr.proceeds)}</td>
+                  <td class="num">${ZAR(mr.cost)}</td>
+                  <td class="num ${mr.gain >= 0 ? 'gain-val' : 'loss-val'}">${ZAR(mr.gain)}</td>
+                  <td class="num muted">${ZAR(mr.fees)}</td>
+                </tr>
+                <tr class="month-disposals-row hidden" data-year="${y}" data-month="${mo}">
+                  <td colspan="6" style="padding:0;background:var(--bg)">
+                    ${renderDisposalTable(mr.disposals, wallet, result)}
+                  </td>
+                </tr>`;
+              }).join('');
+              return `<tr class="year-row" data-year="${y}" style="cursor:pointer">
+                <td><span class="expand-arrow" style="font-size:10px;color:var(--text-muted);margin-right:6px">▶</span><span class="year-label">${taxYearLabel(y)}</span></td>
                 <td class="num muted">${r.count}</td>
                 <td class="num">${ZAR(r.proceeds)}</td>
                 <td class="num">${ZAR(r.cost)}</td>
                 <td class="num ${r.gain >= 0 ? 'gain-val' : 'loss-val'}">${ZAR(r.gain)}</td>
                 <td class="num muted">${ZAR(r.fees)}</td>
+              </tr>
+              <tr class="year-months-row hidden" data-year="${y}">
+                <td colspan="6" style="padding:0">
+                  <table class="tbl-yearly" style="border-top:none;margin:0">
+                    <tbody>${monthRows}</tbody>
+                  </table>
+                </td>
               </tr>`;
             }).join('')}
           </tbody>
@@ -446,7 +560,7 @@ async function refreshTaxResults(wallet) {
     await refreshTaxResults(wallet);
   });
 
-  // Show more / show all
+  // Show more / show all (Spending card)
   contentEl.querySelector('#btn-show-more')?.addEventListener('click', e => {
     contentEl.querySelectorAll('.disposal-extra').forEach(r => r.classList.remove('hidden'));
     e.target.closest('div').remove();
@@ -477,11 +591,37 @@ async function refreshTaxResults(wallet) {
     });
   });
 
-  // Expand/collapse disposal rows
-  contentEl.querySelectorAll('.disposal-row').forEach(row => {
+  // Year expand/collapse
+  contentEl.querySelectorAll('.year-row').forEach(row => {
     row.addEventListener('click', () => {
+      const y         = row.dataset.year;
+      const monthsRow = contentEl.querySelector(`.year-months-row[data-year="${y}"]`);
+      const arrow     = row.querySelector('.expand-arrow');
+      const open      = !monthsRow.classList.contains('hidden');
+      monthsRow.classList.toggle('hidden', open);
+      arrow.textContent = open ? '▶' : '▼';
+    });
+  });
+
+  // Month expand/collapse
+  contentEl.querySelectorAll('.month-row').forEach(row => {
+    row.addEventListener('click', e => {
+      e.stopPropagation();
+      const { year, month }  = row.dataset;
+      const disposalsRow     = contentEl.querySelector(`.month-disposals-row[data-year="${year}"][data-month="${month}"]`);
+      const arrow            = row.querySelector('.expand-arrow');
+      const open             = !disposalsRow.classList.contains('hidden');
+      disposalsRow.classList.toggle('hidden', open);
+      arrow.textContent = open ? '▶' : '▼';
+    });
+  });
+
+  // Expand/collapse disposal rows (Spending card + all month expansion tables)
+  contentEl.querySelectorAll('.disposal-row').forEach(row => {
+    row.addEventListener('click', e => {
+      e.stopPropagation();
       const idx   = row.dataset.idx;
-      const group = contentEl.querySelector(`.lot-group[data-group="${idx}"]`);
+      const group = row.closest('tbody').querySelector(`.lot-group[data-group="${idx}"]`);
       const arrow = row.querySelector('td:first-child');
       const open  = !group.classList.contains('hidden');
       group.classList.toggle('hidden', open);
