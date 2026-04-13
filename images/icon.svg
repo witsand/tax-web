@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!-- Navy rounded background -->
+  <rect width="512" height="512" rx="112" fill="#0f172a"/>
+  <!-- Subtle inner glow ring -->
+  <rect x="20" y="20" width="472" height="472" rx="96" fill="none" stroke="#1e293b" stroke-width="2"/>
+
+  <!-- Bitcoin ₿ symbol as paths (drawn manually for reliability) -->
+  <!-- Vertical stem left -->
+  <rect x="172" y="120" width="28" height="272" rx="6" fill="#f59e0b"/>
+  <!-- Vertical stem right (offset) -->
+  <rect x="216" y="136" width="28" height="240" rx="6" fill="#f59e0b"/>
+
+  <!-- Top serif bars -->
+  <rect x="156" y="120" width="60" height="22" rx="5" fill="#f59e0b"/>
+  <rect x="156" y="370" width="60" height="22" rx="5" fill="#f59e0b"/>
+
+  <!-- Upper bulge of ₿ -->
+  <path d="M216 136 h62 a52 52 0 0 1 0 104 h-62 Z" fill="#f59e0b"/>
+  <!-- Lower bulge of ₿ (slightly wider) -->
+  <path d="M216 240 h72 a58 58 0 0 1 0 116 h-72 Z" fill="#f59e0b"/>
+
+  <!-- Cutouts to make interior white (counter shapes) -->
+  <path d="M244 158 h34 a30 30 0 0 1 0 60 h-34 Z" fill="#0f172a"/>
+  <path d="M244 262 h44 a36 36 0 0 1 0 72 h-44 Z" fill="#0f172a"/>
+
+  <!-- Horizontal notch between bulges -->
+  <rect x="216" y="232" width="90" height="16" rx="4" fill="#0f172a"/>
+</svg>

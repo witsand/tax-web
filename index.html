@@ -2,8 +2,28 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>SA Bitcoin Tax</title>
+
+  <!-- PWA manifest -->
+  <link rel="manifest" href="/manifest.json">
+
+  <!-- Favicon -->
+  <link rel="icon" href="/favicon.ico" sizes="any">
+  <link rel="icon" href="/images/icon.svg" type="image/svg+xml">
+
+  <!-- iOS home-screen support -->
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="SA BTC Tax">
+  <link rel="apple-touch-icon" href="/images/apple-touch-icon.png">
+
+  <!-- Theme colour (Android address bar / PWA chrome) -->
+  <meta name="theme-color" content="#0f172a">
+
+  <!-- Prevent phone-number linkification -->
+  <meta name="format-detection" content="telephone=no">
+
   <link rel="stylesheet" href="./css/styles.css">
 </head>
 <body>
@@ -241,5 +261,12 @@
 </div>
 
 <script type="module" src="./js/app.js?v=2"></script>
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js');
+    });
+  }
+</script>
 </body>
 </html>
