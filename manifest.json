@@ -1,6 +1,6 @@
 {
-  "name": "SA Bitcoin Tax",
-  "short_name": "SA BTC Tax",
+  "name": "ClearSats",
+  "short_name": "ClearSats",
   "description": "Calculate your South African Bitcoin tax obligations — privately, in your browser.",
   "start_url": "/",
   "display": "standalone",

@@ -1,7 +1,7 @@
-// Service Worker — SA Bitcoin Tax
+// Service Worker — ClearSats
 // Cache-first strategy for app shell; network-first for API calls.
 
-const CACHE = 'sabtctax-v1';
+const CACHE = 'clearsats-v1';
 
 const APP_SHELL = [
   '/',
