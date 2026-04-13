@@ -84,17 +84,15 @@
               <span id="wd-currency-label"></span>
             </div>
           </div>
-          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:6px">
+            <select id="sel-method" style="border:1px solid var(--border-mid);border-radius:var(--radius);padding:5px 8px;font-size:13px;color:var(--text);background:var(--surface);cursor:pointer">
+              <option value="FIFO">FIFO</option>
+              <option value="LIFO">LIFO</option>
+              <option value="HIFO">HIFO</option>
+              <option value="LCFO">LCFO</option>
+              <option value="ACB">ACB</option>
+            </select>
             <div class="ctrl-group">
-              <label for="sel-method" style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;margin-right:6px">Method</label>
-              <select id="sel-method" style="border:1px solid var(--border-mid);border-radius:var(--radius);padding:5px 8px;font-size:13px;color:var(--text);background:var(--surface);cursor:pointer">
-                <option value="FIFO">FIFO</option>
-                <option value="LIFO">LIFO</option>
-                <option value="HIFO">HIFO</option>
-                <option value="LCFO">LCFO</option>
-                <option value="ACB">ACB</option>
-              </select>
-              <div class="ctrl-sep"></div>
               <button id="btn-refresh-wallet" class="icon-btn" title="Refresh transactions">↻</button>
               <button id="btn-hard-refresh-wallet" class="icon-btn danger" title="Hard refresh (re-fetch all from scratch)">⟳</button>
             </div>

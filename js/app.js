@@ -159,14 +159,14 @@ async function calcWallet(wallet) {
   const scale    = wallet.currency === 'BTC' ? 1e8 : 100;
   const scaled   = Object.fromEntries(Object.entries(priceMap).map(([t, p]) => [t, p / scale]));
   const stale    = wallet.currency === 'BTC' ? 86400 : 259200;
-  const result   = calculateDisposals(txs, scaled, wallet.method ?? 'HIFO', stale);
+  const result   = calculateDisposals(txs, scaled, wallet.method ?? 'FIFO', stale);
   // Build id→time map so disposal detail rows can show acquisition dates
   result.txMap   = Object.fromEntries(txs.map(t => [t.id, t]));
   return result;
 }
 
 function disposalGain(d) {
-  const proceeds = d.amount * d.proceedsPerUnit;
+  const proceeds = (d.amount + d.fee) * d.proceedsPerUnit;
   const cost     = d.sources.reduce((s, x) => s + x.amount * x.costPerUnit, 0);
   return { proceeds, cost, gain: proceeds - cost };
 }
@@ -326,7 +326,7 @@ async function renderWalletDetail(walletId) {
   badge.textContent = wallet.currency === 'BTC' ? '₿' : '$';
   document.getElementById('wd-currency-label').textContent = wallet.currency === 'BTC' ? 'Bitcoin' : 'US Dollar';
   document.getElementById('wd-last-synced').textContent   = wallet.lastSynced ? fmtAgo(wallet.lastSynced) : 'never';
-  document.getElementById('sel-method').value             = wallet.method ?? 'HIFO';
+  document.getElementById('sel-method').value             = wallet.method ?? 'FIFO';
 
   const sm          = walletSm(wallet);
   const defaultFrom = taxYearStart(taxYear(now(), sm), sm);
@@ -1109,7 +1109,7 @@ async function saveBlinkAccount() {
   await db.put('accounts', { id: accId, name, type: 'blink', apiKey });
 
   for (const w of addFetchedWallets) {
-    await db.put('wallets', { id: uid(), accountId: accId, blinkWalletId: w.id, currency: w.currency, method: 'HIFO', lastSynced: 0 });
+    await db.put('wallets', { id: uid(), accountId: accId, blinkWalletId: w.id, currency: w.currency, method: 'FIFO', lastSynced: 0 });
   }
 
   closeOverlay('overlay-add-account');
@@ -1140,7 +1140,7 @@ async function saveCsvAccount() {
   const accId = uid();
   const wId   = uid();
   await db.put('accounts', { id: accId, name, type: 'csv' });
-  await db.put('wallets',  { id: wId, accountId: accId, currency, method: 'HIFO', lastSynced: now() });
+  await db.put('wallets',  { id: wId, accountId: accId, currency, method: 'FIFO', lastSynced: now() });
 
   const txEntries = addCsvRows.map(r => ({
     _key: `${wId}:${r.id}`,
