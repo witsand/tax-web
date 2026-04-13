@@ -1,6 +1,6 @@
 import { openDB, db }           from './db.js';
 import { calculateDisposals }    from './taxcalc.js';
-import { fetchBlinkWallets, fetchBlinkTransactions } from './blink.js';
+import { fetchBlinkWallets, fetchBlinkTransactions, fetchBlinkAuthScopes } from './blink.js';
 import { fetchBtcZarPrices }     from './btczar-prices.js';
 import { fetchUsdZarPrices }     from './usdzar-prices.js';
 
@@ -103,9 +103,9 @@ async function syncPrices(hard = false) {
 
 function renderPricesStatus() {
   const latest = Math.min(pricesLastUpdated.btc || 0, pricesLastUpdated.usd || 0);
-  const el = document.getElementById('prices-status');
-  const stale = latest === 0 || now() - latest > 86400 * 2;
-  el.innerHTML = `<span class="dot${stale ? ' stale' : ''}"></span>Prices ${latest ? fmtAgo(latest) : 'not loaded'}`;
+  const stale  = latest === 0 || now() - latest > 86400 * 2;
+  document.getElementById('prices-dot').className  = `dot${stale ? ' stale' : ''}`;
+  document.getElementById('prices-text').textContent = `Prices ${latest ? fmtAgo(latest) : 'not loaded'}`;
 }
 
 // ── Account / wallet management ────────────────────────────────────────────────
@@ -137,7 +137,7 @@ async function syncWallet(wallet, hard = false) {
       time: t.time,
       amount: t.amount,
       fee:  t.fee,
-    })));
+    })).sort((a, b) => a.time - b.time || (a.amount >= 0 ? 0 : 1) - (b.amount >= 0 ? 0 : 1)));
   }
 
   wallet.lastSynced = now();
@@ -152,7 +152,7 @@ async function syncAccount(account, hard = false) {
 // ── Tax calculation ────────────────────────────────────────────────────────────
 
 async function calcWallet(wallet) {
-  const txs = (await db.getByIndex('transactions', 'walletId', wallet.id))
+  const txs = (await db.getTransactionsSorted(wallet.id))
     .map(t => ({ id: t.id, time: t.time, amount: t.amount, fee: t.fee }));
   const priceMap = await db.asMap(wallet.currency === 'BTC' ? 'prices_btc' : 'prices_usd');
   const scale    = wallet.currency === 'BTC' ? 1e8 : 100;
@@ -188,17 +188,16 @@ function summariseByYear(disposals, sm) {
 // ── Rendering ──────────────────────────────────────────────────────────────────
 
 function renderAccountList() {
-  const el = document.getElementById('account-list');
+  const el      = document.getElementById('account-list');
+  const emptyEl = document.getElementById('sidebar-empty');
 
   if (!accounts.length) {
-    el.innerHTML = `
-      <div class="empty-sidebar">
-        <p>No accounts yet.<br>Connect a Blink wallet or upload a CSV to get started.</p>
-        <button class="btn btn-primary btn-sm" onclick="document.getElementById('btn-add-account').click()">Add first account</button>
-      </div>`;
+    emptyEl.classList.remove('hidden');
+    el.innerHTML = '';
     return;
   }
 
+  emptyEl.classList.add('hidden');
   el.innerHTML = accounts.map(acc => {
     const ws         = wallets[acc.id] ?? [];
     const isOpen     = acc._expanded !== false; // default open
@@ -206,11 +205,9 @@ function renderAccountList() {
       <div class="account-group">
         <div class="account-header" data-acc="${acc.id}">
           <span class="account-toggle" data-toggle="${acc.id}" style="font-size:10px;color:var(--text-muted);margin-right:4px;transition:transform .15s">${isOpen ? '▼' : '▶'}</span>
-          <span class="account-name" title="${acc.name}">${acc.name}</span>
+          <span class="account-name" title="${acc.name}">${acc.name}<span class="acct-type-label"> - <img src="images/${acc.type === 'blink' ? 'blink' : 'csv'}.svg" class="acct-type-icon" alt="${acc.type === 'blink' ? 'Blink' : 'CSV'}"></span></span>
           <span class="account-actions">
             <button class="icon-btn" title="Rename account" data-action="rename-acc" data-acc="${acc.id}">✎</button>
-            <button class="icon-btn" title="Refresh transactions" data-action="refresh-acc" data-acc="${acc.id}">↻</button>
-            <button class="icon-btn danger" title="Hard refresh (re-fetch all)" data-action="hard-refresh-acc" data-acc="${acc.id}">⟳</button>
             <button class="icon-btn danger" title="Delete account" data-action="delete-acc" data-acc="${acc.id}">✕</button>
           </span>
         </div>
@@ -218,7 +215,7 @@ function renderAccountList() {
           ${ws.map(w => `
             <div class="wallet-item${selectedWalletId === w.id ? ' active' : ''}" data-wallet="${w.id}">
               <span class="wallet-currency-badge badge-${w.currency.toLowerCase()}">${w.currency === 'BTC' ? '₿' : '$'}</span>
-              <span class="wallet-label">${w.currency} Wallet</span>
+              <span class="wallet-label">${w.currency === 'BTC' ? 'Bitcoin' : 'US Dollar'}</span>
               <span class="wallet-synced">${w.lastSynced ? fmtAgo(w.lastSynced) : '–'}</span>
             </div>`).join('')}
         </div>
@@ -231,69 +228,57 @@ async function renderWalletDetail(walletId) {
   if (!wallet) return;
   const account = accounts.find(a => a.id === wallet.accountId);
 
-  const el = document.getElementById('wallet-detail');
-  el.classList.remove('hidden');
+  document.getElementById('wallet-detail').classList.remove('hidden');
   document.getElementById('empty-detail').classList.add('hidden');
 
-  // Get all txs to find earliest time for default date range
-  const txs = await db.getByIndex('transactions', 'walletId', walletId);
-  const earliest = txs.reduce((m, t) => Math.min(m, t.time), Infinity);
+  document.getElementById('wd-account-name').textContent  = account?.name ?? '';
+  document.getElementById('wd-type-icon').src              = `images/${account?.type === 'blink' ? 'blink' : 'csv'}.svg`;
+  document.getElementById('wd-type-icon').alt              = account?.type === 'blink' ? 'Blink' : 'CSV';
+  document.getElementById('wd-type-label').textContent     = account?.type === 'blink' ? '' : 'CSV File';
+  const badge = document.getElementById('wd-currency-badge');
+  badge.className   = `wallet-currency-badge badge-${wallet.currency.toLowerCase()}`;
+  badge.textContent = wallet.currency === 'BTC' ? '₿' : '$';
+  document.getElementById('wd-currency-label').textContent = wallet.currency === 'BTC' ? 'Bitcoin' : 'US Dollar';
+  document.getElementById('wd-last-synced').textContent   = wallet.lastSynced ? fmtAgo(wallet.lastSynced) : 'never';
+  document.getElementById('sel-method').value             = wallet.method ?? 'HIFO';
+
   const sm          = walletSm(wallet);
   const defaultFrom = taxYearStart(taxYear(now(), sm), sm);
   const defaultTo   = now();
-
-  const fromVal = dateStr(defaultFrom);
-  const toVal   = dateStr(defaultTo);
-
-  el.innerHTML = `
-    <button class="btn-back">‹ Accounts</button>
-    <div class="detail-header">
-      <div>
-        <div class="detail-title">
-          ${wallet.currency === 'BTC' ? '₿' : '$'} ${wallet.currency} Wallet
-          <span>— ${account?.name ?? ''}</span>
-        </div>
-        <div class="detail-meta">Last synced: ${wallet.lastSynced ? fmtAgo(wallet.lastSynced) : 'never'}</div>
-      </div>
-      <div class="ctrl-group" style="align-self:center">
-        <label for="sel-method" style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;margin-right:6px">Method</label>
-        <select id="sel-method" style="border:1px solid var(--border-mid);border-radius:var(--radius);padding:5px 8px;font-size:13px;color:var(--text);background:var(--surface);cursor:pointer">
-          ${['FIFO','LIFO','HIFO','LCFO','ACB'].map(m => `<option${wallet.method === m ? ' selected' : ''}>${m}</option>`).join('')}
-        </select>
-      </div>
-    </div>
-
-    <div id="tax-results" data-default-from="${fromVal}" data-default-to="${toVal}">
-      <div class="loading-state"><div class="spinner"></div> Calculating…</div>
-    </div>`;
-
-  // Wire up controls
-  document.getElementById('sel-method').addEventListener('change', async e => {
-    wallet.method = e.target.value;
-    await db.put('wallets', wallet);
-    await refreshTaxResults(wallet);
-  });
+  const taxEl       = document.getElementById('tax-results');
+  taxEl.dataset.defaultFrom = dateStr(defaultFrom);
+  taxEl.dataset.defaultTo   = dateStr(defaultTo);
 
   await refreshTaxResults(wallet);
 }
 
 async function refreshTaxResults(wallet) {
-  const el = document.getElementById('tax-results');
-  if (!el) return;
+  const taxEl     = document.getElementById('tax-results');
+  const loadingEl = document.getElementById('tax-loading');
+  const errorEl   = document.getElementById('tax-error');
+  const contentEl = document.getElementById('tax-content');
+  if (!taxEl) return;
 
   // Preserve filter values across re-renders
-  const fromVal = document.getElementById('inp-from')?.value ?? el.dataset.defaultFrom ?? dateStr(taxYearStart(taxYear(now())));
-  const toVal   = document.getElementById('inp-to')?.value   ?? el.dataset.defaultTo   ?? dateStr(now());
+  const fromVal = document.getElementById('inp-from')?.value ?? taxEl.dataset.defaultFrom ?? dateStr(taxYearStart(taxYear(now())));
+  const toVal   = document.getElementById('inp-to')?.value   ?? taxEl.dataset.defaultTo   ?? dateStr(now());
 
-  el.innerHTML = `<div class="loading-state"><div class="spinner"></div> Calculating…</div>`;
+  loadingEl.classList.remove('hidden');
+  errorEl.classList.add('hidden');
+  contentEl.classList.add('hidden');
+  contentEl.innerHTML = '';
 
   let result;
   try {
     result = await calcWallet(wallet);
   } catch (e) {
-    el.innerHTML = `<div class="warnings-box"><p style="color:var(--loss)">${e.message}</p></div>`;
+    loadingEl.classList.add('hidden');
+    errorEl.textContent = e.message;
+    errorEl.classList.remove('hidden');
     return;
   }
+
+  loadingEl.classList.add('hidden');
 
   // Yearly summary uses ALL disposals (no date filter)
   const sm           = walletSm(wallet);
@@ -312,7 +297,7 @@ async function refreshTaxResults(wallet) {
 
   const PAGE_SIZE = 5;
 
-  el.innerHTML = `
+  contentEl.innerHTML = `
     ${result.warnings.length ? `
     <details class="warnings-box" style="margin-bottom:4px">
       <summary>⚠ ${result.warnings.length} warning${result.warnings.length > 1 ? 's' : ''}</summary>
@@ -452,16 +437,18 @@ async function refreshTaxResults(wallet) {
 
     `;
 
+  contentEl.classList.remove('hidden');
+
   // Tax year start month — persisted per wallet
-  document.getElementById('sel-tax-month')?.addEventListener('change', async e => {
+  contentEl.querySelector('#sel-tax-month')?.addEventListener('change', async e => {
     wallet.taxYearStartMonth = parseInt(e.target.value, 10);
     await db.put('wallets', wallet);
     await refreshTaxResults(wallet);
   });
 
   // Show more / show all
-  document.getElementById('btn-show-more')?.addEventListener('click', e => {
-    el.querySelectorAll('.disposal-extra').forEach(r => r.classList.remove('hidden'));
+  contentEl.querySelector('#btn-show-more')?.addEventListener('click', e => {
+    contentEl.querySelectorAll('.disposal-extra').forEach(r => r.classList.remove('hidden'));
     e.target.closest('div').remove();
   });
 
@@ -469,23 +456,20 @@ async function refreshTaxResults(wallet) {
   const isValidDate = v => /^\d{4}-\d{2}-\d{2}$/.test(v) && !isNaN(Date.parse(v));
 
   ['inp-from', 'inp-to'].forEach(id => {
-    const text   = document.getElementById(id);
+    const text   = contentEl.querySelector(`#${id}`);
     if (!text) return;
     const wrap   = text.closest('.date-picker-wrap');
     const native = wrap.querySelector('.date-picker-native');
     const btn    = wrap.querySelector('.date-picker-btn');
 
-    // Calendar icon opens the native picker
     btn.addEventListener('click', () => native.showPicker?.() ?? native.click());
 
-    // Native picker → copy yyyy-mm-dd into text input and recalc
     native.addEventListener('change', () => {
       text.value = native.value;
       text.style.borderColor = '';
       refreshTaxResults(wallet);
     });
 
-    // Manual text entry → validate and recalc on blur
     text.addEventListener('change', () => {
       const valid = isValidDate(text.value);
       text.style.borderColor = valid ? '' : 'var(--loss)';
@@ -494,10 +478,10 @@ async function refreshTaxResults(wallet) {
   });
 
   // Expand/collapse disposal rows
-  el.querySelectorAll('.disposal-row').forEach(row => {
+  contentEl.querySelectorAll('.disposal-row').forEach(row => {
     row.addEventListener('click', () => {
       const idx   = row.dataset.idx;
-      const group = el.querySelector(`.lot-group[data-group="${idx}"]`);
+      const group = contentEl.querySelector(`.lot-group[data-group="${idx}"]`);
       const arrow = row.querySelector('td:first-child');
       const open  = !group.classList.contains('hidden');
       group.classList.toggle('hidden', open);
@@ -517,128 +501,297 @@ function openAddAccountModal() {
 }
 
 function renderAddStep() {
-  const body   = document.getElementById('add-modal-body');
-  const footer = document.getElementById('add-modal-footer');
-  document.getElementById('add-modal-title').textContent = addStep === 1 ? 'Add Account' : addType === 'blink' ? 'Connect Blink' : 'Upload CSV';
+  const isStep1 = addStep === 1;
+  const isBlink = addStep === 2 && addType === 'blink';
+  const isCsv   = addStep === 2 && addType === 'csv';
 
-  if (addStep === 1) {
-    body.innerHTML = `
-      <div class="form-group">
-        <label class="form-label">Account Name</label>
-        <input class="form-input" id="add-name" placeholder="e.g. My Blink Account" value="">
-      </div>
-      <div class="form-group">
-        <label class="form-label">Account Type</label>
-        <div class="type-toggle">
-          <button class="type-btn${addType === 'blink' ? ' active' : ''}" data-type="blink">⚡ Blink</button>
-          <button class="type-btn${addType === 'csv'   ? ' active' : ''}" data-type="csv">📄 Upload CSV</button>
-        </div>
-      </div>`;
-    footer.innerHTML = `
-      <button class="btn btn-secondary" id="btn-add-cancel">Cancel</button>
-      <button class="btn btn-primary" id="btn-add-next">Next →</button>`;
+  document.getElementById('add-modal-title').textContent = isStep1 ? 'Add Account' : isBlink ? 'Connect Blink' : 'Upload CSV';
 
-    body.querySelectorAll('.type-btn').forEach(btn => btn.addEventListener('click', () => {
-      addType = btn.dataset.type;
-      body.querySelectorAll('.type-btn').forEach(b => b.classList.toggle('active', b.dataset.type === addType));
-    }));
-    document.getElementById('btn-add-cancel').addEventListener('click', () => closeOverlay('overlay-add-account'));
-    document.getElementById('btn-add-next').addEventListener('click', () => {
-      addName = document.getElementById('add-name').value.trim();
-      if (!addName) { document.getElementById('add-name').focus(); return; }
-      addStep = 2; renderAddStep();
-    });
+  document.getElementById('add-step-1').classList.toggle('hidden', !isStep1);
+  document.getElementById('add-step-blink').classList.toggle('hidden', !isBlink);
+  document.getElementById('add-step-csv').classList.toggle('hidden', !isCsv);
+  document.getElementById('add-footer-1').classList.toggle('hidden', !isStep1);
+  document.getElementById('add-footer-blink').classList.toggle('hidden', !isBlink);
+  document.getElementById('add-footer-csv').classList.toggle('hidden', !isCsv);
 
-  } else if (addType === 'blink') {
-    body.innerHTML = `
-      <div class="form-group">
-        <label class="form-label">Blink API Key</label>
-        <input class="form-input" id="add-apikey" type="password" placeholder="Enter your Blink API key">
-      </div>
-      <div id="fetch-wallets-status"></div>
-      <div id="fetch-wallets-list"></div>`;
-    footer.innerHTML = `
-      <button class="btn btn-secondary" id="btn-add-back">← Back</button>
-      <button class="btn btn-secondary" id="btn-fetch-wallets">Fetch Wallets</button>
-      <button class="btn btn-primary hidden" id="btn-blink-save">Save Account</button>`;
-
-    document.getElementById('btn-add-back').addEventListener('click', () => { addStep = 1; renderAddStep(); });
-    document.getElementById('btn-fetch-wallets').addEventListener('click', async () => {
-      const key = document.getElementById('add-apikey').value.trim();
-      if (!key) return;
-      const status = document.getElementById('fetch-wallets-status');
-      status.innerHTML = `<div class="loading-state"><div class="spinner"></div> Fetching wallets…</div>`;
-      try {
-        addFetchedWallets = await fetchBlinkWallets(key);
-        status.innerHTML = '';
-        document.getElementById('fetch-wallets-list').innerHTML = `
-          <div class="wallet-fetch-list">
-            ${addFetchedWallets.map(w => `
-              <div class="wallet-fetch-item">
-                <span class="wallet-currency-badge badge-${w.currency.toLowerCase()}">${w.currency === 'BTC' ? '₿' : '$'}</span>
-                <span>${w.currency} Wallet</span>
-              </div>`).join('')}
-          </div>`;
-        document.getElementById('btn-blink-save').classList.remove('hidden');
-      } catch (e) {
-        status.innerHTML = `<p style="color:var(--loss);font-size:13px;margin-top:8px">Error: ${e.message}</p>`;
-      }
-    });
-    document.getElementById('btn-blink-save').addEventListener('click', () => saveBlinkAccount());
-
-  } else {
-    body.innerHTML = `
-      <div class="form-group">
-        <label class="form-label">CSV File</label>
-        <input class="form-input" id="add-csv-file" type="file" accept=".csv">
-        <p class="form-hint">id,time,amount,fee</p>
-      </div>
-      <div class="form-group">
-        <label class="form-label">Unit Denomination</label>
-        <select class="form-select" id="add-denom">
-          <option value="sats">Satoshis (BTC wallet)</option>
-          <option value="btc">BTC → convert to sats (BTC wallet)</option>
-          <option value="cents">US Cents (USD wallet)</option>
-          <option value="usd">USD → convert to cents (USD wallet)</option>
-        </select>
-      </div>
-      <div id="csv-preview-box"></div>`;
-    footer.innerHTML = `
-      <button class="btn btn-secondary" id="btn-add-back">← Back</button>
-      <button class="btn btn-primary hidden" id="btn-csv-save">Save Account</button>`;
-
-    document.getElementById('btn-add-back').addEventListener('click', () => { addStep = 1; renderAddStep(); });
-    document.getElementById('add-denom').addEventListener('change', e => { addCsvDenom = e.target.value; });
-    document.getElementById('add-csv-file').addEventListener('change', e => parseCsvFile(e.target.files[0]));
-    document.getElementById('btn-csv-save').addEventListener('click', () => saveCsvAccount());
+  if (isStep1) {
+    document.getElementById('add-name').value = addName;
+    document.querySelectorAll('.type-btn').forEach(b => b.classList.toggle('active', b.dataset.type === addType));
   }
+  if (isBlink) {
+    document.getElementById('add-apikey').value = '';
+    document.getElementById('fetch-wallets-loading').classList.add('hidden');
+    document.getElementById('fetch-wallets-error').classList.add('hidden');
+    document.getElementById('fetch-wallets-warning').classList.add('hidden');
+    document.getElementById('fetch-wallets-list').innerHTML = '';
+    document.getElementById('btn-blink-save').classList.add('hidden');
+  }
+  if (isCsv) {
+    document.getElementById('add-csv-file').value = '';
+    document.getElementById('csv-preview-box').innerHTML = '';
+    document.getElementById('csv-format-error').classList.add('hidden');
+    document.getElementById('btn-csv-save').classList.add('hidden');
+    addCsvRows = [];
+  }
+}
+
+const MONTH_NAMES = ['jan','feb','mar','apr','may','jun','jul','aug','sep','oct','nov','dec'];
+
+function parseTimestamp(raw) {
+  const s = raw?.trim();
+  if (!s) return NaN;
+
+  // Pure integer — Unix timestamp. >1e11 is likely milliseconds, convert to seconds.
+  if (/^\d+$/.test(s)) {
+    const n = Number(s);
+    return n > 1e11 ? Math.floor(n / 1000) : n;
+  }
+
+  // ISO 8601 and RFC 2822 — let the native parser handle (YYYY-MM-DD…)
+  if (/^\d{4}[-\/]/.test(s)) {
+    const d = new Date(s);
+    if (!isNaN(d.getTime())) return Math.floor(d.getTime() / 1000);
+  }
+
+  // DD/MM/YYYY, DD-MM-YYYY, DD.MM.YYYY  (day-first — SA standard)
+  const dmy = s.match(/^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})$/);
+  if (dmy) {
+    let [, dd, mm, yy] = dmy.map(Number);
+    if (yy < 100) yy += yy < 50 ? 2000 : 1900;
+    const d = new Date(yy, mm - 1, dd);
+    if (!isNaN(d.getTime()) && d.getDate() === dd && d.getMonth() === mm - 1)
+      return Math.floor(d.getTime() / 1000);
+    // Retry as MM/DD if day-first produced an invalid date (e.g. month > 12)
+    const d2 = new Date(yy, dd - 1, mm);
+    if (!isNaN(d2.getTime()) && d2.getMonth() === dd - 1)
+      return Math.floor(d2.getTime() / 1000);
+  }
+
+  // YYYY/MM/DD or YYYY.MM.DD with slashes/dots
+  const ymd = s.match(/^(\d{4})[\/\.](\d{1,2})[\/\.](\d{1,2})$/);
+  if (ymd) {
+    const d = new Date(Number(ymd[1]), Number(ymd[2]) - 1, Number(ymd[3]));
+    if (!isNaN(d.getTime()) && d.getMonth() === Number(ymd[2]) - 1)
+      return Math.floor(d.getTime() / 1000);
+  }
+
+  // "15 Jan 2024" / "15 January 2024"
+  const dMonY = s.match(/^(\d{1,2})\s+([a-z]+)\s+(\d{2,4})$/i);
+  if (dMonY) {
+    const mon = MONTH_NAMES.indexOf(dMonY[2].toLowerCase().slice(0, 3));
+    if (mon !== -1) {
+      let yr = Number(dMonY[3]);
+      if (yr < 100) yr += yr < 50 ? 2000 : 1900;
+      const d = new Date(yr, mon, Number(dMonY[1]));
+      if (!isNaN(d.getTime())) return Math.floor(d.getTime() / 1000);
+    }
+  }
+
+  // "Jan 15 2024" / "January 15, 2024" / "Jan 15, 2024"
+  const monDY = s.match(/^([a-z]+)\s+(\d{1,2}),?\s+(\d{2,4})$/i);
+  if (monDY) {
+    const mon = MONTH_NAMES.indexOf(monDY[1].toLowerCase().slice(0, 3));
+    if (mon !== -1) {
+      let yr = Number(monDY[3]);
+      if (yr < 100) yr += yr < 50 ? 2000 : 1900;
+      const d = new Date(yr, mon, Number(monDY[2]));
+      if (!isNaN(d.getTime())) return Math.floor(d.getTime() / 1000);
+    }
+  }
+
+  // Last resort — let the browser try anything remaining
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) return Math.floor(d.getTime() / 1000);
+
+  return NaN;
+}
+
+function parseAllCsvRows(text) {
+  const lines = text.trim().split('\n');
+  const header = lines[0]?.toLowerCase().replace(/\r/g, '');
+  if (header !== 'id,time,amount,fee') return null;
+
+  const valid = [], invalid = [];
+  lines.slice(1).forEach((rawLine, i) => {
+    const line = rawLine.replace(/\r/g, '');
+    if (!line.trim()) return;
+    const lineNum = i + 2;
+    const parts   = line.split(',');
+
+    // Need at least 4 parts. Allow extra commas inside the date field (e.g. "Jan 15, 2024")
+    // by always treating the last two parts as amount and fee.
+    if (parts.length < 4) {
+      invalid.push({ lineNum, raw: line, reason: `expected 4 columns, got ${parts.length}` });
+      return;
+    }
+
+    const id     = parts[0];
+    const fee    = parts[parts.length - 1];
+    const amount = parts[parts.length - 2];
+    const time   = parts.slice(1, parts.length - 2).join(','); // re-joins if date had a comma
+
+    const idTrimmed = id.trim();
+    const timeNum   = parseTimestamp(time);
+    const amountNum = Number(amount.trim());
+    const feeNum    = Number(fee.trim());
+
+    const errors = [];
+    if (!idTrimmed)       errors.push('missing id');
+    if (isNaN(timeNum))   errors.push('unrecognised date');
+    if (isNaN(amountNum)) errors.push('invalid amount');
+    if (isNaN(feeNum))    errors.push('invalid fee');
+
+    if (errors.length) {
+      invalid.push({ lineNum, raw: line, reason: errors.join(', ') });
+    } else {
+      valid.push({ id: idTrimmed, time: timeNum, amount: amountNum, fee: feeNum });
+    }
+  });
+
+  return { valid, invalid };
+}
+
+function pickCsvFile(currency) {
+  return new Promise(resolve => {
+    const multipliers = { sats: 1, btc: 1e8, cents: 1, usd: 100 };
+    let parsedValid = null;
+
+    document.getElementById('pick-csv-units').innerHTML = currency === 'BTC'
+      ? '<option value="sats">Satoshis</option><option value="btc">BTC</option>'
+      : '<option value="cents">Cents</option><option value="usd">USD</option>';
+
+    const fileInput  = document.getElementById('pick-csv-file');
+    const previewEl  = document.getElementById('pick-csv-preview');
+    const errEl      = document.getElementById('pick-csv-err');
+    const okBtn      = document.getElementById('btn-csv-pick-ok');
+    const cancelBtn  = document.getElementById('btn-csv-pick-cancel');
+    const closeBtn   = document.getElementById('btn-csv-pick-close');
+
+    fileInput.value  = '';
+    previewEl.innerHTML = '';
+    errEl.textContent   = '';
+
+    openOverlay('overlay-csv-pick');
+
+    const cleanup = val => {
+      closeOverlay('overlay-csv-pick');
+      fileInput.onchange = null;
+      okBtn.onclick = cancelBtn.onclick = closeBtn.onclick = null;
+      resolve(val);
+    };
+
+    fileInput.onchange = e => {
+      parsedValid = null;
+      previewEl.innerHTML = '';
+      errEl.textContent   = '';
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = ev => {
+        const result = parseAllCsvRows(ev.target.result);
+        if (!result) {
+          errEl.textContent = 'Invalid CSV. Expected header: id,time,amount,fee';
+          return;
+        }
+
+        parsedValid = result.valid;
+
+        let summary = `${result.valid.length} valid row${result.valid.length !== 1 ? 's' : ''}`;
+        if (result.invalid.length) {
+          summary += `, <span style="color:var(--loss)">${result.invalid.length} invalid (will be skipped)</span>`;
+        }
+
+        const invalidByLine = new Map(result.invalid.map(r => [r.lineNum, r.reason]));
+        const dataLines = ev.target.result.trim().split('\n').slice(1).filter(l => l.trim());
+        const sample    = dataLines.slice(0, 5);
+
+        const rowsHtml = sample.map((rawLine, i) => {
+          const lineNum = i + 2;
+          const line    = rawLine.replace(/\r/g, '');
+          const reason  = invalidByLine.get(lineNum);
+          return reason
+            ? `<div class="csv-preview-row invalid-row">Line ${lineNum}: ${line} — <em>${reason}</em></div>`
+            : `<div class="csv-preview-row">${line}</div>`;
+        }).join('');
+
+        const more = dataLines.length > 5
+          ? `<div class="csv-preview-row" style="color:var(--text-muted);font-style:italic">…${dataLines.length - 5} more rows</div>`
+          : '';
+
+        previewEl.innerHTML = `
+          <div class="csv-preview" style="margin-top:10px">
+            <div class="csv-preview-row header-row">id,time,amount,fee</div>
+            ${rowsHtml}${more}
+          </div>
+          <p style="font-size:12px;color:var(--text-muted);margin-top:6px">${summary}</p>`;
+
+        if (!result.valid.length) errEl.textContent = 'No valid rows found. Nothing to import.';
+      };
+      reader.readAsText(file);
+    };
+
+    cancelBtn.onclick = () => cleanup(null);
+    closeBtn.onclick  = () => cleanup(null);
+
+    okBtn.onclick = () => {
+      if (!parsedValid) { errEl.textContent = 'Please select a valid CSV file.'; return; }
+      if (!parsedValid.length) { errEl.textContent = 'No valid rows to import.'; return; }
+      const multiplier = multipliers[document.getElementById('pick-csv-units').value];
+      cleanup({ rows: parsedValid, multiplier });
+    };
+  });
 }
 
 function parseCsvFile(file) {
   if (!file) return;
   const reader = new FileReader();
   reader.onload = e => {
-    const lines = e.target.result.trim().split('\n');
-    const header = lines[0]?.toLowerCase().replace(/\r/g, '');
     const preview = document.getElementById('csv-preview-box');
+    const result  = parseAllCsvRows(e.target.result);
 
-    if (!header || !['id,time,amount,fee'].includes(header)) {
-      preview.innerHTML = `<p style="color:var(--loss);font-size:13px;margin-top:8px">Invalid format. Expected header: id,time,amount,fee</p>`;
+    if (!result) {
+      document.getElementById('csv-format-error').classList.remove('hidden');
+      document.getElementById('btn-csv-save').classList.add('hidden');
+      addCsvRows = [];
       return;
     }
+    document.getElementById('csv-format-error').classList.add('hidden');
 
-    addCsvRows = lines.slice(1).filter(l => l.trim()).map(l => {
-      const [id, time, amount, fee] = l.replace(/\r/g, '').split(',');
-      return { id: id?.trim(), time: Number(time), amount: Number(amount), fee: Number(fee) };
-    }).filter(r => r.id && !isNaN(r.time) && !isNaN(r.amount) && !isNaN(r.fee));
+    addCsvRows = result.valid;
 
-    const sample = lines.slice(0, 4);
+    const invalidByLine = new Map(result.invalid.map(r => [r.lineNum, r.reason]));
+    const dataLines = e.target.result.trim().split('\n').slice(1).filter(l => l.trim());
+    const sample    = dataLines.slice(0, 5);
+
+    const rowsHtml = sample.map((rawLine, i) => {
+      const lineNum = i + 2;
+      const line    = rawLine.replace(/\r/g, '');
+      const reason  = invalidByLine.get(lineNum);
+      return reason
+        ? `<div class="csv-preview-row invalid-row">Line ${lineNum}: ${line} — <em>${reason}</em></div>`
+        : `<div class="csv-preview-row">${line}</div>`;
+    }).join('');
+
+    const more    = dataLines.length > 5
+      ? `<div class="csv-preview-row" style="color:var(--text-muted);font-style:italic">…${dataLines.length - 5} more rows</div>`
+      : '';
+
+    let summary = `${result.valid.length} valid row${result.valid.length !== 1 ? 's' : ''}`;
+    if (result.invalid.length) summary += `, <span style="color:var(--loss)">${result.invalid.length} invalid (will be skipped)</span>`;
+
     preview.innerHTML = `
       <div class="csv-preview">
-        ${sample.map((l, i) => `<div class="csv-preview-row${i===0?' header-row':''}">${l.replace(/\r/g,'')}</div>`).join('')}
+        <div class="csv-preview-row header-row">id,time,amount,fee</div>
+        ${rowsHtml}${more}
       </div>
-      <p style="font-size:12px;color:var(--text-muted);margin-top:6px">${addCsvRows.length} valid rows detected</p>`;
-    document.getElementById('btn-csv-save').classList.remove('hidden');
+      <p style="font-size:12px;color:var(--text-muted);margin-top:6px">${summary}</p>`;
+
+    if (result.valid.length > 0) {
+      document.getElementById('btn-csv-save').classList.remove('hidden');
+    } else {
+      document.getElementById('btn-csv-save').classList.add('hidden');
+    }
   };
   reader.readAsText(file);
 }
@@ -663,6 +816,13 @@ async function saveBlinkAccount() {
     try { await syncWallet(w); } catch (e) { console.warn('Sync failed:', e.message); }
   }
   renderAccountList();
+
+  const btcWallet = (wallets[accId] ?? []).find(w => w.currency === 'BTC') ?? wallets[accId]?.[0];
+  if (btcWallet) {
+    selectedWalletId = btcWallet.id;
+    renderAccountList();
+    await renderWalletDetail(btcWallet.id);
+  }
 }
 
 async function saveCsvAccount() {
@@ -685,12 +845,19 @@ async function saveCsvAccount() {
     time:   r.time,
     amount: Math.round(r.amount * multiplier),
     fee:    Math.round(r.fee    * multiplier),
-  }));
+  })).sort((a, b) => a.time - b.time || (a.amount >= 0 ? 0 : 1) - (b.amount >= 0 ? 0 : 1));
   await db.putMany('transactions', txEntries);
 
   closeOverlay('overlay-add-account');
   await loadAccounts();
   renderAccountList();
+
+  const csvWallet = wallets[accId]?.[0];
+  if (csvWallet) {
+    selectedWalletId = csvWallet.id;
+    renderAccountList();
+    await renderWalletDetail(csvWallet.id);
+  }
 }
 
 // ── Loading helpers ────────────────────────────────────────────────────────────
@@ -772,23 +939,6 @@ function attachEvents() {
       return;
     }
 
-    if (action === 'refresh-acc') {
-      const acc = accounts.find(a => a.id === accId);
-      if (!acc) return;
-      e.target.textContent = '…';
-      try { await syncAccount(acc, false); } catch (err) { console.warn(err); }
-      renderAccountList();
-      if (selectedWalletId) renderWalletDetail(selectedWalletId);
-      return;
-    }
-    if (action === 'hard-refresh-acc') {
-      const acc = accounts.find(a => a.id === accId);
-      if (!acc || !(await confirm(`Delete all cached transactions for "${acc.name}" and re-fetch from scratch?`))) return;
-      try { await syncAccount(acc, true); } catch (err) { console.warn(err); }
-      renderAccountList();
-      if (selectedWalletId) renderWalletDetail(selectedWalletId);
-      return;
-    }
     if (wId) {
       selectedWalletId = wId;
       renderAccountList();
@@ -807,19 +957,79 @@ function attachEvents() {
     document.getElementById('sidebar').classList.remove('sidebar-hidden');
   }
 
-  // Back button in detail panel (delegated — button is injected by renderWalletDetail)
-  document.getElementById('detail').addEventListener('click', e => {
-    if (e.target.closest('.btn-back')) {
-      selectedWalletId = null;
-      document.getElementById('wallet-detail').classList.add('hidden');
-      document.getElementById('empty-detail').classList.remove('hidden');
-      renderAccountList();
-      expandSidebar();
+  // Back button in wallet detail
+  document.querySelector('#wallet-detail .btn-back').addEventListener('click', () => {
+    selectedWalletId = null;
+    document.getElementById('wallet-detail').classList.add('hidden');
+    document.getElementById('empty-detail').classList.remove('hidden');
+    renderAccountList();
+    expandSidebar();
+  });
+
+  // Wallet detail controls (wired once; look up current wallet via selectedWalletId at event time)
+  document.getElementById('sel-method').addEventListener('change', async e => {
+    const wallet = Object.values(wallets).flat().find(w => w.id === selectedWalletId);
+    if (!wallet) return;
+    wallet.method = e.target.value;
+    await db.put('wallets', wallet);
+    await refreshTaxResults(wallet);
+  });
+
+  document.getElementById('btn-refresh-wallet').addEventListener('click', async e => {
+    const wallet  = Object.values(wallets).flat().find(w => w.id === selectedWalletId);
+    const account = accounts.find(a => a.id === wallet?.accountId);
+    if (!wallet) return;
+    if (account?.type === 'csv') {
+      const result = await pickCsvFile(wallet.currency);
+      if (!result) return;
+      const { rows, multiplier } = result;
+      const entries = rows.map(r => ({
+        _key: `${wallet.id}:${r.id}`, id: r.id, walletId: wallet.id,
+        time: r.time, amount: Math.round(r.amount * multiplier), fee: Math.round(r.fee * multiplier),
+      })).sort((a, b) => a.time - b.time || (a.amount >= 0 ? 0 : 1) - (b.amount >= 0 ? 0 : 1));
+      await db.putMany('transactions', entries);
+      wallet.lastSynced = now();
+      await db.put('wallets', wallet);
+      await renderWalletDetail(selectedWalletId);
+    } else {
+      e.target.textContent = '…'; e.target.disabled = true;
+      try { await syncWallet(wallet, false); } catch (err) { console.warn(err); }
+      e.target.textContent = '↻'; e.target.disabled = false;
+      await renderWalletDetail(selectedWalletId);
+    }
+  });
+
+  document.getElementById('btn-hard-refresh-wallet').addEventListener('click', async e => {
+    const wallet  = Object.values(wallets).flat().find(w => w.id === selectedWalletId);
+    const account = accounts.find(a => a.id === wallet?.accountId);
+    if (!wallet) return;
+    if (account?.type === 'csv') {
+      const result = await pickCsvFile(wallet.currency);
+      if (!result) return;
+      const { rows, multiplier } = result;
+      const existing = await db.getByIndex('transactions', 'walletId', wallet.id);
+      if (!(await confirm(`Delete all ${existing.length} existing transactions for this wallet and replace with ${rows.length} from the new file?`))) return;
+      const entries = rows.map(r => ({
+        _key: `${wallet.id}:${r.id}`, id: r.id, walletId: wallet.id,
+        time: r.time, amount: Math.round(r.amount * multiplier), fee: Math.round(r.fee * multiplier),
+      })).sort((a, b) => a.time - b.time || (a.amount >= 0 ? 0 : 1) - (b.amount >= 0 ? 0 : 1));
+      await db.deleteByIndex('transactions', 'walletId', wallet.id);
+      await db.putMany('transactions', entries);
+      wallet.lastSynced = now();
+      await db.put('wallets', wallet);
+      await renderWalletDetail(selectedWalletId);
+    } else {
+      if (!(await confirm('Delete all cached transactions for this wallet and re-fetch from scratch?'))) return;
+      e.target.textContent = '…'; e.target.disabled = true;
+      try { await syncWallet(wallet, true); } catch (err) { console.warn(err); }
+      e.target.textContent = '⟳'; e.target.disabled = false;
+      await renderWalletDetail(selectedWalletId);
     }
   });
 
   // Header buttons
   document.getElementById('btn-add-account').addEventListener('click', () => openAddAccountModal());
+  document.getElementById('btn-add-first-account').addEventListener('click', () => openAddAccountModal());
   document.getElementById('btn-show-welcome').addEventListener('click', () => openOverlay('overlay-welcome'));
   document.getElementById('btn-refresh-prices').addEventListener('click', async () => {
     await syncPrices(false);
@@ -831,6 +1041,61 @@ function attachEvents() {
     if (selectedWalletId) await refreshTaxResults(Object.values(wallets).flat().find(w => w.id === selectedWalletId));
   });
 
+  // Add account modal — wired once
+  document.querySelectorAll('.type-btn').forEach(btn => btn.addEventListener('click', () => {
+    addType = btn.dataset.type;
+    document.querySelectorAll('.type-btn').forEach(b => b.classList.toggle('active', b.dataset.type === addType));
+  }));
+  document.getElementById('btn-add-cancel').addEventListener('click', () => closeOverlay('overlay-add-account'));
+  document.getElementById('btn-close-add').addEventListener('click', () => closeOverlay('overlay-add-account'));
+  document.getElementById('btn-add-next').addEventListener('click', () => {
+    addName = document.getElementById('add-name').value.trim();
+    if (!addName) { document.getElementById('add-name').focus(); return; }
+    addStep = 2; renderAddStep();
+  });
+  document.getElementById('btn-add-back-blink').addEventListener('click', () => { addStep = 1; renderAddStep(); });
+  document.getElementById('btn-add-back-csv').addEventListener('click', () => { addStep = 1; renderAddStep(); });
+  document.getElementById('btn-fetch-wallets').addEventListener('click', async () => {
+    const key = document.getElementById('add-apikey').value.trim();
+    if (!key) return;
+    document.getElementById('fetch-wallets-loading').classList.remove('hidden');
+    document.getElementById('fetch-wallets-error').classList.add('hidden');
+    document.getElementById('fetch-wallets-warning').classList.add('hidden');
+    document.getElementById('fetch-wallets-list').innerHTML = '';
+    document.getElementById('btn-blink-save').classList.add('hidden');
+    try {
+      const [wallets, scopes] = await Promise.all([
+        fetchBlinkWallets(key),
+        fetchBlinkAuthScopes(key),
+      ]);
+      addFetchedWallets = wallets;
+      document.getElementById('fetch-wallets-loading').classList.add('hidden');
+      document.getElementById('fetch-wallets-list').innerHTML = `
+        <div class="wallet-fetch-list">
+          ${addFetchedWallets.map(w => `
+            <div class="wallet-fetch-item">
+              <span class="wallet-currency-badge badge-${w.currency.toLowerCase()}">${w.currency === 'BTC' ? '₿' : '$'}</span>
+              <span>${w.currency} Wallet</span>
+            </div>`).join('')}
+        </div>`;
+      const extraScopes = scopes.filter(s => s === 'RECEIVE' || s === 'WRITE');
+      if (extraScopes.length) {
+        const warnEl = document.getElementById('fetch-wallets-warning');
+        warnEl.textContent = `Warning: this key has ${extraScopes.join(' + ')} permission${extraScopes.length > 1 ? 's' : ''} in addition to READ. For security, use a READ-only key — generate one at dashboard.blink.sv.`;
+        warnEl.classList.remove('hidden');
+      }
+      document.getElementById('btn-blink-save').classList.remove('hidden');
+    } catch (e) {
+      document.getElementById('fetch-wallets-loading').classList.add('hidden');
+      document.getElementById('fetch-wallets-error').textContent = `Error: ${e.message}`;
+      document.getElementById('fetch-wallets-error').classList.remove('hidden');
+    }
+  });
+  document.getElementById('btn-blink-save').addEventListener('click', () => saveBlinkAccount());
+  document.getElementById('add-denom').addEventListener('change', e => { addCsvDenom = e.target.value; });
+  document.getElementById('add-csv-file').addEventListener('change', e => parseCsvFile(e.target.files[0]));
+  document.getElementById('btn-csv-save').addEventListener('click', () => saveCsvAccount());
+
   // Welcome modal
   document.getElementById('chk-agree').addEventListener('change', e => {
     document.getElementById('btn-continue').disabled = !e.target.checked;
@@ -839,8 +1104,6 @@ function attachEvents() {
     localStorage.setItem('termsAccepted', '1');
     closeOverlay('overlay-welcome');
   });
-
-  document.getElementById('btn-close-add').addEventListener('click', () => closeOverlay('overlay-add-account'));
 }
 
 // ── Main init ──────────────────────────────────────────────────────────────────

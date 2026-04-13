@@ -52,6 +52,9 @@ async function doQuery(apiKey, query, variables) {
     headers: { 'Content-Type': 'application/json', 'X-API-KEY': apiKey },
     body: JSON.stringify({ query, variables }),
   });
+  if (res.status === 401) {
+    throw new Error('API key is invalid or has expired. Generate a new key at dashboard.blink.sv.');
+  }
   if (!res.ok) throw new Error(`Blink HTTP ${res.status}: ${await res.text()}`);
   const { data, errors } = await res.json();
   if (errors?.length) throw new Error(`Blink GraphQL: ${errors.map(e => e.message).join('; ')}`);
@@ -64,6 +67,18 @@ async function doQuery(apiKey, query, variables) {
  * @param {string} apiKey — Blink API key (X-API-KEY)
  * @returns {Promise<Array<{ id: string, currency: string }>>}
  */
+/**
+ * Returns the scopes granted to the current API key.
+ * Scopes: READ, RECEIVE, WRITE
+ *
+ * @param {string} apiKey
+ * @returns {Promise<string[]>} e.g. ['READ'] or ['READ', 'RECEIVE', 'WRITE']
+ */
+export async function fetchBlinkAuthScopes(apiKey) {
+  const data = await doQuery(apiKey, `query { authorization { scopes } }`, {});
+  return data.authorization.scopes ?? [];
+}
+
 export async function fetchBlinkWallets(apiKey) {
   const data = await doQuery(apiKey, `
     query { me { defaultAccount { wallets { id walletCurrency } } } }

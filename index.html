@@ -29,9 +29,18 @@
       <div class="sidebar-header">
         <button class="btn btn-secondary btn-full btn-sm" id="btn-add-account">＋ Add Account</button>
       </div>
-      <div class="sidebar-scroll" id="account-list"></div>
+      <div class="sidebar-scroll">
+        <div id="sidebar-empty" class="empty-sidebar hidden">
+          <p>No accounts yet.<br>Connect a Blink wallet or upload a CSV to get started.</p>
+          <button class="btn btn-primary btn-sm" id="btn-add-first-account">Add first account</button>
+        </div>
+        <div id="account-list"></div>
+      </div>
       <div class="sidebar-prices">
-        <span id="prices-status"><span class="dot stale"></span>Loading prices…</span>
+        <span id="prices-status">
+          <span class="dot stale" id="prices-dot"></span>
+          <span id="prices-text">Loading prices…</span>
+        </span>
         <div class="prices-btns">
           <button class="btn btn-secondary btn-sm" id="btn-refresh-prices" title="Fetch missing price data">↻ Refresh</button>
           <button class="btn btn-secondary btn-sm" id="btn-hard-refresh-prices" title="Clear and re-fetch all prices">⟳ Hard refresh</button>
@@ -43,7 +52,41 @@
         <div class="empty-icon">₿</div>
         <p>Select a wallet to view tax details</p>
       </div>
-      <div id="wallet-detail" class="hidden"></div>
+      <div id="wallet-detail" class="hidden">
+        <button class="btn-back">‹ Accounts</button>
+        <div class="detail-header">
+          <div>
+            <div class="detail-title">
+              <span id="wd-account-name"></span><span class="acct-type-label"> - <img id="wd-type-icon" class="acct-type-icon" alt=""> <span id="wd-type-label"></span></span>
+            </div>
+            <div class="detail-subtitle">
+              <span id="wd-currency-badge" class="wallet-currency-badge"></span>
+              <span id="wd-currency-label"></span>
+            </div>
+          </div>
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px">
+            <div class="ctrl-group">
+              <label for="sel-method" style="font-size:11px;font-weight:600;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;margin-right:6px">Method</label>
+              <select id="sel-method" style="border:1px solid var(--border-mid);border-radius:var(--radius);padding:5px 8px;font-size:13px;color:var(--text);background:var(--surface);cursor:pointer">
+                <option value="FIFO">FIFO</option>
+                <option value="LIFO">LIFO</option>
+                <option value="HIFO">HIFO</option>
+                <option value="LCFO">LCFO</option>
+                <option value="ACB">ACB</option>
+              </select>
+              <div class="ctrl-sep"></div>
+              <button id="btn-refresh-wallet" class="icon-btn" title="Refresh transactions">↻</button>
+              <button id="btn-hard-refresh-wallet" class="icon-btn danger" title="Hard refresh (re-fetch all from scratch)">⟳</button>
+            </div>
+            <div class="detail-meta">Last synced: <span id="wd-last-synced"></span></div>
+          </div>
+        </div>
+        <div id="tax-results">
+          <div id="tax-loading" class="loading-state"><div class="spinner"></div> Calculating…</div>
+          <div id="tax-error" class="warnings-box hidden" style="color:var(--loss)"></div>
+          <div id="tax-content" class="hidden"></div>
+        </div>
+      </div>
     </div>
   </div>
 </div>
@@ -85,11 +128,98 @@
       <h2 id="add-modal-title">Add Account</h2>
       <button class="modal-close" id="btn-close-add">✕</button>
     </div>
-    <div class="modal-body" id="add-modal-body">
-      <!-- rendered by JS -->
+    <div class="modal-body">
+
+      <!-- Step 1: Name + Type -->
+      <div id="add-step-1">
+        <div class="form-group">
+          <label class="form-label">Account Name</label>
+          <input class="form-input" id="add-name" placeholder="e.g. My Blink Account" value="">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Account Type</label>
+          <div class="type-toggle">
+            <button class="type-btn active" data-type="blink">⚡ Blink</button>
+            <button class="type-btn" data-type="csv">📄 Upload CSV</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Step 2: Blink -->
+      <div id="add-step-blink" class="hidden">
+        <div class="form-group">
+          <label class="form-label">Blink API Key</label>
+          <input class="form-input" id="add-apikey" type="password" placeholder="Enter your Blink API key">
+        </div>
+        <div id="fetch-wallets-status">
+          <div id="fetch-wallets-loading" class="loading-state hidden"><div class="spinner"></div> Fetching wallets…</div>
+          <p id="fetch-wallets-error" style="color:var(--loss);font-size:13px;margin-top:8px" class="hidden"></p>
+          <p id="fetch-wallets-warning" style="color:var(--warning,#b45309);font-size:13px;margin-top:8px" class="hidden"></p>
+        </div>
+        <div id="fetch-wallets-list"></div>
+      </div>
+
+      <!-- Step 2: CSV -->
+      <div id="add-step-csv" class="hidden">
+        <div class="form-group">
+          <label class="form-label">CSV File</label>
+          <input class="form-input" id="add-csv-file" type="file" accept=".csv">
+          <p class="form-hint">id,time,amount,fee — time accepts any date format (e.g. 2024-01-15, 15/01/2024, 15 Jan 2024, Unix timestamp)</p>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Unit Denomination</label>
+          <select class="form-select" id="add-denom">
+            <option value="sats">Satoshis (BTC wallet)</option>
+            <option value="btc">BTC → convert to sats (BTC wallet)</option>
+            <option value="cents">US Cents (USD wallet)</option>
+            <option value="usd">USD → convert to cents (USD wallet)</option>
+          </select>
+        </div>
+        <p id="csv-format-error" class="hidden" style="color:var(--loss);font-size:13px;margin-top:8px">Invalid format. Expected header: id,time,amount,fee</p>
+        <div id="csv-preview-box"></div>
+      </div>
+
     </div>
-    <div class="modal-footer" id="add-modal-footer">
-      <!-- rendered by JS -->
+    <div class="modal-footer">
+      <div id="add-footer-1" style="display:contents">
+        <button class="btn btn-secondary" id="btn-add-cancel">Cancel</button>
+        <button class="btn btn-primary" id="btn-add-next">Next →</button>
+      </div>
+      <div id="add-footer-blink" class="hidden" style="display:contents">
+        <button class="btn btn-secondary" id="btn-add-back-blink">← Back</button>
+        <button class="btn btn-secondary" id="btn-fetch-wallets">Fetch Wallets</button>
+        <button class="btn btn-primary hidden" id="btn-blink-save">Save Account</button>
+      </div>
+      <div id="add-footer-csv" class="hidden" style="display:contents">
+        <button class="btn btn-secondary" id="btn-add-back-csv">← Back</button>
+        <button class="btn btn-primary hidden" id="btn-csv-save">Save Account</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- CSV Picker Modal -->
+<div class="overlay" id="overlay-csv-pick">
+  <div class="modal" style="width:380px;">
+    <div class="modal-header">
+      <h2 id="csv-pick-title">Import CSV</h2>
+      <button class="modal-close" id="btn-csv-pick-close">✕</button>
+    </div>
+    <div class="modal-body">
+      <div class="form-group">
+        <label class="form-label">CSV File</label>
+        <input id="pick-csv-file" class="form-input" type="file" accept=".csv">
+      </div>
+      <div class="form-group">
+        <label class="form-label">Units</label>
+        <select id="pick-csv-units" class="form-input"></select>
+      </div>
+      <div id="pick-csv-preview"></div>
+      <p id="pick-csv-err" style="color:var(--loss);font-size:12px;min-height:16px;margin:0"></p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-secondary" id="btn-csv-pick-cancel">Cancel</button>
+      <button class="btn btn-primary" id="btn-csv-pick-ok">Import</button>
     </div>
   </div>
 </div>

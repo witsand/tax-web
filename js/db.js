@@ -64,6 +64,19 @@ export const db = {
     });
   },
 
+  getTransactionsSorted: async (walletId) => {
+    const d = await openDB();
+    const records = await new Promise((res, rej) => {
+      const r = d.transaction('transactions').objectStore('transactions')
+                 .index('walletId').getAll(walletId);
+      r.onsuccess = ({ target: { result } }) => res(result);
+      r.onerror   = ({ target: { error  } }) => rej(error);
+    });
+    return records.sort(
+      (a, b) => a.time - b.time || (a.amount >= 0 ? 0 : 1) - (b.amount >= 0 ? 0 : 1)
+    );
+  },
+
   deleteByIndex: async (s, idx, val) => {
     const d = await openDB();
     await new Promise((res, rej) => {
