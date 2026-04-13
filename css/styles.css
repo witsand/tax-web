@@ -203,16 +203,19 @@ td.muted { color: var(--text-muted); font-size: 12px; }
 /* ── Transactions table ── */
 .tx-unspent { background: var(--gain-bg) !important; }
 .tx-unspent:hover { background: #dcfce7 !important; }
-.tx-spent { background: var(--loss-bg) !important; }
-.tx-spent:hover { background: #fee2e2 !important; }
-.tx-partial { background: var(--warn-bg) !important; }
-.tx-partial:hover { background: #fef3c7 !important; }
+.spend-amt { font-weight: 700; }
+.tx-short-id { font-family: monospace; font-size: 12px; color: var(--text-muted); white-space: nowrap; }
 
 /* ── Toggle buttons ── */
-.tx-toggles { display: flex; gap: 6px; flex-wrap: wrap; }
+.tx-toggles { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .tog-btn { font-size: 11px; font-weight: 600; padding: 3px 10px; border-radius: 10px; border: 1px solid var(--border-mid); background: var(--surface); color: var(--text-muted); cursor: pointer; transition: background .15s, color .15s, border-color .15s; letter-spacing: .3px; }
 .tog-btn.active { background: var(--blue); color: #fff; border-color: var(--blue); }
 .tog-btn:hover:not(.active) { background: var(--bg); border-color: var(--blue); color: var(--blue); }
+/* Receives + Available only share a pill border */
+.tog-group { display: flex; border: 1px solid var(--border-mid); border-radius: 10px; overflow: hidden; }
+.tog-group .tog-btn { border-radius: 0; border: none; border-right: 1px solid var(--border-mid); }
+.tog-group .tog-btn:last-child { border-right: none; }
+.tog-group .tog-btn.active { border-radius: 0; }
 
 /* ── Dual range slider ── */
 .tx-slider-wrap { padding: 14px 18px 10px; border-bottom: 1px solid var(--border); }

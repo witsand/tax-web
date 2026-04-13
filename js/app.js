@@ -11,7 +11,8 @@ const uid  = () => crypto.randomUUID();
 const now  = () => Math.floor(Date.now() / 1000);
 const dateStr = ts => new Date(ts * 1000).toISOString().slice(0, 10);
 const dateToTs = s => new Date(s + 'T00:00:00Z').getTime() / 1000;
-const fmtAgo = ts => { if (!ts) return 'never'; const s = now() - ts; if (s < 60) return 'just now'; if (s < 3600) return `${Math.floor(s/60)}m ago`; if (s < 86400) return `${Math.floor(s/3600)}h ago`; return `${Math.floor(s/86400)}d ago`; };
+const fmtAgo  = ts => { if (!ts) return 'never'; const s = now() - ts; if (s < 60) return 'just now'; if (s < 3600) return `${Math.floor(s/60)}m ago`; if (s < 86400) return `${Math.floor(s/3600)}h ago`; return `${Math.floor(s/86400)}d ago`; };
+const shortId = id => id ? `..${String(id).slice(-6)}` : '–';
 
 function nativeAmt(amount, currency) {
   if (currency === 'BTC') return `${Math.abs(amount).toLocaleString('en-ZA')} sats`;
@@ -218,7 +219,7 @@ function renderDisposalTable(disposals, wallet, result) {
       return `<tr class="lot-row">
         <td></td>
         <td class="muted" style="font-size:11px;padding-left:32px">${acqDate}</td>
-        <td style="font-size:11px;color:var(--text-muted);font-family:monospace;word-break:break-all">${s.txID}</td>
+        <td class="tx-short-id" style="font-size:11px">${shortId(s.txID)}</td>
         <td class="num" style="font-size:11px" title="Total lot size">${lotTotal}</td>
         <td class="num" style="font-size:11px" title="Used in this disposal">${used}</td>
         <td class="num" style="font-size:11px">${rate}</td>
@@ -227,18 +228,18 @@ function renderDisposalTable(disposals, wallet, result) {
     return `<tr class="disposal-row" data-idx="${i}" style="cursor:pointer">
         <td style="color:var(--text-muted);font-size:11px;text-align:center">▶</td>
         <td class="muted">${dateStr(d.time)}</td>
-        <td class="num">${d.amount > 0 ? nativeAmt(d.amount, wallet.currency) : '–'}</td>
-        <td class="num">${ZAR(proceeds)}</td>
+        <td class="tx-short-id">${shortId(d.txID)}</td>
+        <td class="num spend-amt">-${nativeAmt(d.amount, wallet.currency)}</td>
+        <td class="num spend-amt">-${ZAR(proceeds)}</td>
         <td class="num muted">${feeZar > 0 ? ZAR(feeZar) : '–'}</td>
       </tr>
       <tr class="lot-group hidden" data-group="${i}">
-        <td colspan="5" style="padding:0;background:var(--bg)">
+        <td colspan="6" style="padding:0;background:var(--bg)">
           <table style="width:100%;border-collapse:collapse">
             <thead>
               <tr style="background:var(--bg);border-bottom:1px solid var(--border)">
                 <td colspan="6" style="padding:8px 14px 6px 14px">
-                  <span style="font-size:12px;color:var(--text-muted);font-family:monospace">${d.txID}</span>
-                  <span style="font-size:12px;color:var(--text-mid);margin-left:16px">Cost Basis: <strong>${ZAR(cost)}</strong></span>
+                  <span style="font-size:12px;color:var(--text-mid)">Cost Basis: <strong>${ZAR(cost)}</strong></span>
                   <span style="font-size:12px;color:var(--text-mid);margin-left:16px">Gain / Loss: <strong class="${gain >= 0 ? 'gain-val' : 'loss-val'}">${ZAR(gain)}</strong></span>
                 </td>
               </tr>
@@ -261,6 +262,7 @@ function renderDisposalTable(disposals, wallet, result) {
     <thead><tr>
       <th style="width:28px"></th>
       <th>Date</th>
+      <th>Tx ID</th>
       <th class="num">${wallet.currency === 'BTC' ? 'Sats' : 'Amount'}</th>
       <th class="num">ZAR</th>
       <th class="num">Fee</th>
@@ -396,7 +398,8 @@ async function refreshTaxResults(wallet) {
   const allTxsSorted = Object.values(result.txMap).sort((a, b) => b.time - a.time);
   const minTsAll  = allTxsSorted.length ? allTxsSorted[allTxsSorted.length - 1].time : now();
   const maxTsAll  = now();
-  const initMinTs = allTxsSorted.length > 5 ? allTxsSorted[4].time : minTsAll;
+  // Default: 50 most recent transactions (available=off by default, all else on)
+  const initMinTs = allTxsSorted.length > 50 ? allTxsSorted[49].time : minTsAll;
 
   const monthOptions = MONTHS.map((m, i) =>
     `<option value="${i}"${i === sm ? ' selected' : ''}>${m}</option>`
@@ -482,9 +485,11 @@ async function refreshTaxResults(wallet) {
       <div class="card-header" style="flex-wrap:wrap;gap:8px">
         <span class="card-title">Transactions</span>
         <div class="tx-toggles">
-          <button class="tog-btn active" data-tog="receives">Receives</button>
           <button class="tog-btn active" data-tog="spending">Spending</button>
-          <button class="tog-btn active" data-tog="available">Available only</button>
+          <div class="tog-group">
+            <button class="tog-btn active" data-tog="receives">Receives</button>
+            <button class="tog-btn" data-tog="available">Available only</button>
+          </div>
         </div>
       </div>
       <div class="tx-slider-wrap">
@@ -552,11 +557,11 @@ async function refreshTaxResults(wallet) {
 
   // ── Transactions table ────────────────────────────────────────────────────────
 
-  const txState = { minTs: initMinTs, maxTs: maxTsAll, receives: true, spending: true, available: true };
+  const MAX_TX = 50;
+  const txState = { minTs: initMinTs, maxTs: maxTsAll, receives: true, spending: true, available: false };
 
-  function getFilteredTxs() {
+  function getToggleFilteredTxs() {
     return allTxsSorted.filter(tx => {
-      if (tx.time < txState.minTs || tx.time > txState.maxTs) return false;
       const recv = tx.amount > 0;
       if (!txState.receives && recv)  return false;
       if (!txState.spending && !recv) return false;
@@ -565,22 +570,54 @@ async function refreshTaxResults(wallet) {
     });
   }
 
+  function getFilteredTxs() {
+    return getToggleFilteredTxs().filter(tx => tx.time >= txState.minTs && tx.time <= txState.maxTs);
+  }
+
+  // Clamp lo/hi so the time window never contains more than MAX_TX transactions.
+  // When the changed handle pushed count over the limit the OTHER handle is moved
+  // inward to maintain exactly MAX_TX, creating a sliding-window effect.
+  function clampRange(changedHandle, lo, hi) {
+    const pool    = getToggleFilteredTxs();
+    const inRange = pool.filter(tx => tx.time >= lo && tx.time <= hi);
+    if (inRange.length <= MAX_TX) return { lo, hi };
+    if (changedHandle === 'min') {
+      // min moved left — anchor lo, push hi left to keep oldest MAX_TX
+      const oldest = [...inRange].sort((a, b) => a.time - b.time);
+      return { lo, hi: oldest[MAX_TX - 1].time };
+    } else {
+      // max moved right — anchor hi, push lo right to keep newest MAX_TX
+      const newest = [...inRange].sort((a, b) => b.time - a.time);
+      return { lo: newest[MAX_TX - 1].time, hi };
+    }
+  }
+
+  // After a toggle change the visible set may shrink or grow; re-clamp from hi.
+  function clampAfterToggle() {
+    const pool    = getToggleFilteredTxs();
+    const inRange = pool.filter(tx => tx.time >= txState.minTs && tx.time <= txState.maxTs);
+    if (inRange.length <= MAX_TX) return;
+    const newest = [...inRange].sort((a, b) => b.time - a.time);
+    txState.minTs = newest[MAX_TX - 1].time;
+    const dsMinEl = contentEl.querySelector('#ds-min');
+    if (dsMinEl) dsMinEl.value = txState.minTs;
+    updateSliderFill();
+  }
+
   function renderTxRow(tx, idx) {
     const recv = tx.amount > 0;
     if (recv) {
       const lot  = lotStatusMap[tx.id];
-      const orig = lot?.original ?? tx.amount;
       const rem  = lot?.remaining ?? 0;
-      const fullyUnspent = orig > 0 && rem >= orig;
-      const fullySpent   = rem === 0;
-      const rowCls = fullyUnspent ? 'tx-unspent' : fullySpent ? 'tx-spent' : 'tx-partial';
-      const amtCls = fullyUnspent ? 'gain-val' : fullySpent ? 'loss-val' : 'partial-val';
-      const cpu    = acqCpu[tx.id] ?? 0;
-      const feeZar = tx.fee * cpu;
-      const remDisplay = fullyUnspent ? '–' : nativeAmt(rem, wallet.currency);
-      return `<tr class="${rowCls}">
+      const hasSats    = rem > 0;
+      const amtCls     = hasSats ? 'gain-val' : '';
+      const cpu        = acqCpu[tx.id] ?? 0;
+      const feeZar     = tx.fee * cpu;
+      const remDisplay = hasSats ? nativeAmt(rem, wallet.currency) : '–';
+      return `<tr class="tx-unspent">
         <td></td>
         <td class="muted">${dateStr(tx.time)}</td>
+        <td class="tx-short-id">${shortId(tx.id)}</td>
         <td class="num ${amtCls}">+${nativeAmt(tx.amount, wallet.currency)}</td>
         <td class="num">${cpu ? ZAR(tx.amount * cpu) : '–'}</td>
         <td class="num muted">${feeZar > 0 ? ZAR(feeZar) : '–'}</td>
@@ -590,8 +627,10 @@ async function refreshTaxResults(wallet) {
       const d   = disposalMap[tx.id];
       const amt = nativeAmt(-tx.amount, wallet.currency);
       if (!d) return `<tr>
-        <td></td><td class="muted">${dateStr(tx.time)}</td>
-        <td class="num loss-val">-${amt}</td>
+        <td></td>
+        <td class="muted">${dateStr(tx.time)}</td>
+        <td class="tx-short-id">${shortId(tx.id)}</td>
+        <td class="num spend-amt">-${amt}</td>
         <td class="num muted">–</td><td class="num muted">–</td><td class="num muted">–</td>
       </tr>`;
       const { proceeds, cost, gain } = disposalGain(d);
@@ -607,7 +646,7 @@ async function refreshTaxResults(wallet) {
         return `<tr class="lot-row">
           <td></td>
           <td class="muted" style="font-size:11px;padding-left:32px">${acqDate}</td>
-          <td style="font-size:11px;color:var(--text-muted);font-family:monospace;word-break:break-all">${s.txID}</td>
+          <td class="tx-short-id" style="font-size:11px">${shortId(s.txID)}</td>
           <td class="num" style="font-size:11px">${lotTotal}</td>
           <td class="num" style="font-size:11px">${used}</td>
           <td class="num" style="font-size:11px">${rate}</td>
@@ -616,19 +655,19 @@ async function refreshTaxResults(wallet) {
       return `<tr class="disposal-row" data-idx="${idx}" style="cursor:pointer">
         <td style="color:var(--text-muted);font-size:11px;text-align:center">▶</td>
         <td class="muted">${dateStr(tx.time)}</td>
-        <td class="num loss-val">-${amt}</td>
-        <td class="num">${ZAR(proceeds)}</td>
+        <td class="tx-short-id">${shortId(tx.id)}</td>
+        <td class="num spend-amt">-${amt}</td>
+        <td class="num spend-amt">-${ZAR(proceeds)}</td>
         <td class="num muted">${feeZar > 0 ? ZAR(feeZar) : '–'}</td>
         <td class="num muted">–</td>
       </tr>
       <tr class="lot-group hidden" data-group="${idx}">
-        <td colspan="6" style="padding:0;background:var(--bg)">
+        <td colspan="7" style="padding:0;background:var(--bg)">
           <table style="width:100%;border-collapse:collapse">
             <thead>
               <tr style="background:var(--bg);border-bottom:1px solid var(--border)">
                 <td colspan="6" style="padding:8px 14px 6px 14px">
-                  <span style="font-size:12px;color:var(--text-muted);font-family:monospace">${d.txID}</span>
-                  <span style="font-size:12px;color:var(--text-mid);margin-left:16px">Cost Basis: <strong>${ZAR(cost)}</strong></span>
+                  <span style="font-size:12px;color:var(--text-mid)">Cost Basis: <strong>${ZAR(cost)}</strong></span>
                   <span style="font-size:12px;color:var(--text-mid);margin-left:16px">Gain / Loss: <strong class="${gain >= 0 ? 'gain-val' : 'loss-val'}">${ZAR(gain)}</strong></span>
                 </td>
               </tr>
@@ -654,6 +693,7 @@ async function refreshTaxResults(wallet) {
     return `<table><thead><tr>
         <th style="width:28px"></th>
         <th>Date</th>
+        <th>Tx ID</th>
         <th class="num">${amtHdr}</th>
         <th class="num">ZAR</th>
         <th class="num">Fee</th>
@@ -704,8 +744,12 @@ async function refreshTaxResults(wallet) {
         if (this === dsMin) { lo = hi; dsMin.value = lo; }
         else                { hi = lo; dsMax.value = hi; }
       }
-      txState.minTs = lo;
-      txState.maxTs = hi;
+      const which   = this === dsMin ? 'min' : 'max';
+      const clamped = clampRange(which, lo, hi);
+      txState.minTs = clamped.lo;
+      txState.maxTs = clamped.hi;
+      dsMin.value   = clamped.lo;
+      dsMax.value   = clamped.hi;
       updateSliderFill();
       updateTxTable();
     };
@@ -714,13 +758,33 @@ async function refreshTaxResults(wallet) {
   }
 
   // Toggles
+  const togReceives  = contentEl.querySelector('[data-tog="receives"]');
+  const togAvailable = contentEl.querySelector('[data-tog="available"]');
+
   contentEl.querySelectorAll('.tog-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const tog    = btn.dataset.tog;
       const active = btn.classList.toggle('active');
-      if (tog === 'receives')  txState.receives  = active;
-      else if (tog === 'spending')  txState.spending  = active;
-      else if (tog === 'available') txState.available = active;
+
+      if (tog === 'spending') {
+        txState.spending = active;
+      } else if (tog === 'receives') {
+        txState.receives = active;
+        if (!active) {
+          // Receives OFF → force Available only OFF too
+          txState.available = false;
+          togAvailable.classList.remove('active');
+        }
+      } else if (tog === 'available') {
+        txState.available = active;
+        if (active) {
+          // Available only ON → force Receives ON
+          txState.receives = true;
+          togReceives.classList.add('active');
+        }
+      }
+
+      clampAfterToggle();
       updateTxTable();
     });
   });
