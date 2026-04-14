@@ -33,6 +33,7 @@ let accounts = [];
 let wallets  = {};   // accountId → [wallet]
 let selectedWalletId = null;
 let pricesLastUpdated = { btc: 0, usd: 0 };
+let didAutoPromptAddAccount = false;
 
 // ── Confirm dialog ─────────────────────────────────────────────────────────────
 
@@ -52,6 +53,26 @@ function confirm(msg) {
 
 function openOverlay(id)  { document.getElementById(id).classList.add('open'); }
 function closeOverlay(id) { document.getElementById(id).classList.remove('open'); }
+
+function setOverlayProgress({ title, text, subtext, pct }) {
+  const titleEl = document.getElementById('progress-title');
+  const textEl  = document.getElementById('progress-text');
+  const subEl   = document.getElementById('progress-subtext');
+  const fillEl  = document.getElementById('progress-fill');
+  if (titleEl && typeof title === 'string') titleEl.innerHTML = title;
+  if (textEl && typeof text === 'string') textEl.textContent = text;
+  if (subEl && typeof subtext === 'string') subEl.textContent = subtext;
+  if (fillEl && typeof pct === 'number') fillEl.style.width = `${Math.max(0, Math.min(100, pct))}%`;
+}
+
+function openProgressOverlay(init = {}) {
+  setOverlayProgress({ title: init.title ?? 'Loading…', text: init.text ?? '', subtext: init.subtext ?? '', pct: init.pct ?? 0 });
+  openOverlay('overlay-progress');
+}
+
+function closeProgressOverlay() {
+  closeOverlay('overlay-progress');
+}
 
 // ── Price syncing ──────────────────────────────────────────────────────────────
 
@@ -120,7 +141,7 @@ async function loadAccounts() {
   }
 }
 
-async function syncWallet(wallet, hard = false) {
+async function syncWallet(wallet, hard = false, onProgress) {
   const account = accounts.find(a => a.id === wallet.accountId);
   if (!account || account.type !== 'blink') return;
 
@@ -129,7 +150,10 @@ async function syncWallet(wallet, hard = false) {
   const existing = await db.getByIndex('transactions', 'walletId', wallet.id);
   const latestTime = existing.reduce((m, t) => Math.max(m, t.time), 0);
 
-  const txs = await fetchBlinkTransactions(account.apiKey, wallet.blinkWalletId, { from: latestTime });
+  const txs = await fetchBlinkTransactions(account.apiKey, wallet.blinkWalletId, {
+    from: latestTime,
+    onProgress,
+  });
   if (txs.length) {
     await db.putMany('transactions', txs.map(t => ({
       _key: `${wallet.id}:${t.id}`,
@@ -278,8 +302,13 @@ function renderAccountList() {
   const emptyEl = document.getElementById('sidebar-empty');
 
   if (!accounts.length) {
-    emptyEl.classList.remove('hidden');
+    emptyEl.classList.add('hidden');
     el.innerHTML = '';
+    if (!didAutoPromptAddAccount && localStorage.getItem('termsAccepted')) {
+      didAutoPromptAddAccount = true;
+      // Defer so the first render completes
+      setTimeout(() => openAddAccountModal(), 0);
+    }
     return;
   }
 
@@ -802,6 +831,10 @@ function openAddAccountModal() {
   addStep = 1; addType = 'blink'; addFetchedWallets = []; addCsvRows = []; addName = '';
   renderAddStep();
   openOverlay('overlay-add-account');
+  setTimeout(() => {
+    const nameEl = document.getElementById('add-name');
+    if (nameEl) { nameEl.focus(); nameEl.select(); }
+  }, 0);
 }
 
 function renderAddStep() {
@@ -809,7 +842,12 @@ function renderAddStep() {
   const isBlink = addStep === 2 && addType === 'blink';
   const isCsv   = addStep === 2 && addType === 'csv';
 
-  document.getElementById('add-modal-title').textContent = isStep1 ? 'Add Account' : isBlink ? 'Connect Blink' : 'Upload CSV';
+  const titleEl = document.getElementById('add-modal-title');
+  if (titleEl) {
+    if (isStep1) titleEl.textContent = 'Add Account';
+    else if (isBlink) titleEl.innerHTML = `Connect <img src="images/blink.svg" alt="Blink" style="height:18px;vertical-align:middle;position:relative;top:-1px">`;
+    else titleEl.textContent = 'Upload CSV';
+  }
 
   document.getElementById('add-step-1').classList.toggle('hidden', !isStep1);
   document.getElementById('add-step-blink').classList.toggle('hidden', !isBlink);
@@ -821,6 +859,10 @@ function renderAddStep() {
   if (isStep1) {
     document.getElementById('add-name').value = addName;
     document.querySelectorAll('.type-btn').forEach(b => b.classList.toggle('active', b.dataset.type === addType));
+    setTimeout(() => {
+      const nameEl = document.getElementById('add-name');
+      if (nameEl) { nameEl.focus(); nameEl.select(); }
+    }, 0);
   }
   if (isBlink) {
     document.getElementById('add-apikey').value = '';
@@ -828,7 +870,7 @@ function renderAddStep() {
     document.getElementById('fetch-wallets-error').classList.add('hidden');
     document.getElementById('fetch-wallets-warning').classList.add('hidden');
     document.getElementById('fetch-wallets-list').innerHTML = '';
-    document.getElementById('btn-blink-save').classList.add('hidden');
+    setTimeout(() => document.getElementById('add-apikey')?.focus(), 0);
   }
   if (isCsv) {
     document.getElementById('add-csv-file').value = '';
@@ -1103,7 +1145,37 @@ function parseCsvFile(file) {
 async function saveBlinkAccount() {
   const name   = addName;
   const apiKey = document.getElementById('add-apikey')?.value.trim() || '';
-  if (!name || !apiKey || !addFetchedWallets.length) return;
+  if (!name || !apiKey) return;
+
+  document.getElementById('fetch-wallets-loading').classList.remove('hidden');
+  document.getElementById('fetch-wallets-error').classList.add('hidden');
+  document.getElementById('fetch-wallets-warning').classList.add('hidden');
+
+  try {
+    const [walletsFromApi, scopes] = await Promise.all([
+      fetchBlinkWallets(apiKey),
+      fetchBlinkAuthScopes(apiKey),
+    ]);
+    addFetchedWallets = walletsFromApi;
+    const extraScopes = (scopes ?? []).filter(s => s === 'RECEIVE' || s === 'WRITE');
+    if (extraScopes.length) {
+      const warnEl = document.getElementById('fetch-wallets-warning');
+      warnEl.textContent = `Warning: this key has ${extraScopes.join(' + ')} permission${extraScopes.length > 1 ? 's' : ''} in addition to READ. For security, use a READ-only key — generate one at dashboard.blink.sv.`;
+      warnEl.classList.remove('hidden');
+    }
+  } catch (e) {
+    document.getElementById('fetch-wallets-loading').classList.add('hidden');
+    document.getElementById('fetch-wallets-error').textContent = `Error: ${e.message}`;
+    document.getElementById('fetch-wallets-error').classList.remove('hidden');
+    return;
+  }
+
+  if (!addFetchedWallets.length) {
+    document.getElementById('fetch-wallets-loading').classList.add('hidden');
+    document.getElementById('fetch-wallets-error').textContent = 'Error: No wallets found on this Blink account.';
+    document.getElementById('fetch-wallets-error').classList.remove('hidden');
+    return;
+  }
 
   const accId = uid();
   await db.put('accounts', { id: accId, name, type: 'blink', apiKey });
@@ -1116,9 +1188,25 @@ async function saveBlinkAccount() {
   await loadAccounts();
   renderAccountList();
 
-  for (const w of wallets[accId] ?? []) {
-    try { await syncWallet(w); } catch (e) { console.warn('Sync failed:', e.message); }
+  const ws = wallets[accId] ?? [];
+  const total = Math.max(1, ws.length);
+  openProgressOverlay({ title: 'Loading transactions…', text: 'Syncing your Blink wallets', subtext: '', pct: 5 });
+  let idx = 0;
+  for (const w of ws) {
+    idx++;
+    const base = 10 + ((idx - 1) / total) * 80;
+    const label = w.currency === 'BTC' ? 'Bitcoin' : 'US Dollar';
+    try {
+      await syncWallet(w, false, p => {
+        const pct = Math.min(90, base + Math.min(1, (p.page || 1) / 10) * (80 / total));
+        setOverlayProgress({ title: 'Loading transactions…', text: `Syncing ${label} wallet`, subtext: `Fetched ${p.fetched.toLocaleString('en-ZA')} transactions`, pct });
+      });
+    } catch (e) {
+      console.warn('Sync failed:', e.message);
+    }
   }
+  setOverlayProgress({ title: 'Loading transactions…', text: 'Finalising…', subtext: '', pct: 100 });
+  setTimeout(() => closeProgressOverlay(), 150);
   renderAccountList();
 
   const btcWallet = (wallets[accId] ?? []).find(w => w.currency === 'BTC') ?? wallets[accId]?.[0];
@@ -1297,7 +1385,19 @@ function attachEvents() {
       await renderWalletDetail(selectedWalletId);
     } else {
       e.target.textContent = '…'; e.target.disabled = true;
-      try { await syncWallet(wallet, false); } catch (err) { console.warn(err); }
+      const label = wallet.currency === 'BTC' ? 'Bitcoin' : 'US Dollar';
+      openProgressOverlay({ title: 'Loading transactions…', text: `Syncing ${label} wallet`, subtext: '', pct: 8 });
+      try {
+        await syncWallet(wallet, false, p => {
+          const pct = Math.min(92, 10 + Math.min(1, (p.page || 1) / 12) * 82);
+          setOverlayProgress({ title: 'Loading transactions…', text: `Syncing ${label} wallet`, subtext: `Fetched ${p.fetched.toLocaleString('en-ZA')} transactions`, pct });
+        });
+      } catch (err) {
+        console.warn(err);
+      } finally {
+        setOverlayProgress({ title: 'Loading transactions…', text: 'Finalising…', subtext: '', pct: 100 });
+        setTimeout(() => closeProgressOverlay(), 150);
+      }
       e.target.textContent = '↻'; e.target.disabled = false;
       await renderWalletDetail(selectedWalletId);
     }
@@ -1325,7 +1425,19 @@ function attachEvents() {
     } else {
       if (!(await confirm('Delete all cached transactions for this wallet and re-fetch from scratch?'))) return;
       e.target.textContent = '…'; e.target.disabled = true;
-      try { await syncWallet(wallet, true); } catch (err) { console.warn(err); }
+      const label = wallet.currency === 'BTC' ? 'Bitcoin' : 'US Dollar';
+      openProgressOverlay({ title: 'Loading transactions…', text: `Syncing ${label} wallet (hard refresh)`, subtext: '', pct: 6 });
+      try {
+        await syncWallet(wallet, true, p => {
+          const pct = Math.min(92, 10 + Math.min(1, (p.page || 1) / 12) * 82);
+          setOverlayProgress({ title: 'Loading transactions…', text: `Syncing ${label} wallet (hard refresh)`, subtext: `Fetched ${p.fetched.toLocaleString('en-ZA')} transactions`, pct });
+        });
+      } catch (err) {
+        console.warn(err);
+      } finally {
+        setOverlayProgress({ title: 'Loading transactions…', text: 'Finalising…', subtext: '', pct: 100 });
+        setTimeout(() => closeProgressOverlay(), 150);
+      }
       e.target.textContent = '⟳'; e.target.disabled = false;
       await renderWalletDetail(selectedWalletId);
     }
@@ -1333,7 +1445,6 @@ function attachEvents() {
 
   // Header buttons
   document.getElementById('btn-add-account').addEventListener('click', () => openAddAccountModal());
-  document.getElementById('btn-add-first-account').addEventListener('click', () => openAddAccountModal());
   document.getElementById('btn-show-welcome').addEventListener('click', () => openOverlay('overlay-welcome'));
   document.getElementById('btn-refresh-prices').addEventListener('click', async () => {
     await syncPrices(false);
@@ -1356,49 +1467,52 @@ function attachEvents() {
     addName = document.getElementById('add-name').value.trim();
     if (!addName) { document.getElementById('add-name').focus(); return; }
     addStep = 2; renderAddStep();
+    if (addType === 'blink') setTimeout(() => document.getElementById('add-apikey')?.focus(), 0);
+    if (addType === 'csv') setTimeout(() => document.getElementById('add-csv-file')?.focus(), 0);
   });
   document.getElementById('btn-add-back-blink').addEventListener('click', () => { addStep = 1; renderAddStep(); });
   document.getElementById('btn-add-back-csv').addEventListener('click', () => { addStep = 1; renderAddStep(); });
-  document.getElementById('btn-fetch-wallets').addEventListener('click', async () => {
-    const key = document.getElementById('add-apikey').value.trim();
-    if (!key) return;
-    document.getElementById('fetch-wallets-loading').classList.remove('hidden');
-    document.getElementById('fetch-wallets-error').classList.add('hidden');
-    document.getElementById('fetch-wallets-warning').classList.add('hidden');
-    document.getElementById('fetch-wallets-list').innerHTML = '';
-    document.getElementById('btn-blink-save').classList.add('hidden');
-    try {
-      const [wallets, scopes] = await Promise.all([
-        fetchBlinkWallets(key),
-        fetchBlinkAuthScopes(key),
-      ]);
-      addFetchedWallets = wallets;
-      document.getElementById('fetch-wallets-loading').classList.add('hidden');
-      document.getElementById('fetch-wallets-list').innerHTML = `
-        <div class="wallet-fetch-list">
-          ${addFetchedWallets.map(w => `
-            <div class="wallet-fetch-item">
-              <span class="wallet-currency-badge badge-${w.currency.toLowerCase()}">${w.currency === 'BTC' ? '₿' : '$'}</span>
-              <span>${w.currency} Wallet</span>
-            </div>`).join('')}
-        </div>`;
-      const extraScopes = scopes.filter(s => s === 'RECEIVE' || s === 'WRITE');
-      if (extraScopes.length) {
-        const warnEl = document.getElementById('fetch-wallets-warning');
-        warnEl.textContent = `Warning: this key has ${extraScopes.join(' + ')} permission${extraScopes.length > 1 ? 's' : ''} in addition to READ. For security, use a READ-only key — generate one at dashboard.blink.sv.`;
-        warnEl.classList.remove('hidden');
-      }
-      document.getElementById('btn-blink-save').classList.remove('hidden');
-    } catch (e) {
-      document.getElementById('fetch-wallets-loading').classList.add('hidden');
-      document.getElementById('fetch-wallets-error').textContent = `Error: ${e.message}`;
-      document.getElementById('fetch-wallets-error').classList.remove('hidden');
-    }
-  });
-  document.getElementById('btn-blink-save').addEventListener('click', () => saveBlinkAccount());
+  document.getElementById('btn-blink-add').addEventListener('click', () => saveBlinkAccount());
   document.getElementById('add-denom').addEventListener('change', e => { addCsvDenom = e.target.value; });
   document.getElementById('add-csv-file').addEventListener('change', e => parseCsvFile(e.target.files[0]));
   document.getElementById('btn-csv-save').addEventListener('click', () => saveCsvAccount());
+
+  // Enter key advances
+  document.getElementById('add-name').addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      document.getElementById('btn-add-next')?.click();
+    }
+  });
+  document.getElementById('add-apikey').addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      document.getElementById('btn-blink-add')?.click();
+    }
+  });
+
+  document.getElementById('btn-paste-apikey')?.addEventListener('click', async () => {
+    const input = document.getElementById('add-apikey');
+    if (!input) return;
+    try {
+      const text = await navigator.clipboard.readText();
+      if (text) input.value = text.trim();
+      input.focus();
+    } catch (e) {
+      // Clipboard read blocked (permission denied or insecure context); focus so user can paste manually.
+      input.focus();
+    }
+  });
+
+  // Make input rows easy to click (hit area)
+  document.querySelectorAll('#overlay-add-account .form-group').forEach(g => {
+    g.addEventListener('mousedown', e => {
+      const t = e.target;
+      if (t instanceof HTMLInputElement || t instanceof HTMLButtonElement || t instanceof HTMLSelectElement || t instanceof HTMLTextAreaElement) return;
+      const input = g.querySelector('input.form-input');
+      if (input) input.focus();
+    });
+  });
 
   // Welcome modal
   document.getElementById('chk-agree').addEventListener('change', e => {
@@ -1407,6 +1521,7 @@ function attachEvents() {
   document.getElementById('btn-continue').addEventListener('click', () => {
     localStorage.setItem('termsAccepted', '1');
     closeOverlay('overlay-welcome');
+    renderAccountList();
   });
 }
 

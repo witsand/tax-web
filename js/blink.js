@@ -91,19 +91,22 @@ export async function fetchBlinkWallets(apiKey) {
  *
  * @param {string} apiKey   — Blink API key (X-API-KEY)
  * @param {string} walletId — Blink wallet ID (BTC or USD wallet)
- * @param {{ from?: number, to?: number }} [options]
+ * @param {{ from?: number, to?: number, onProgress?: (p: { page: number, fetched: number }) => void }} [options]
  *   - from: unix timestamp (seconds) — only include transactions at or after this time (default: 0)
  *   - to:   unix timestamp (seconds) — only include transactions at or before this time (default: now)
+ *   - onProgress: called after each page is processed
  * @returns {Promise<Array<{ id: string, time: number, amount: number, fee: number }>>}
  *   Sorted oldest-first. amount is in satoshis (BTC) or cents (USD);
  *   positive = receive, negative = send. fee is always non-negative.
  */
-export async function fetchBlinkTransactions(apiKey, walletId, { from = 0, to = Math.floor(Date.now() / 1000) } = {}) {
+export async function fetchBlinkTransactions(apiKey, walletId, { from = 0, to = Math.floor(Date.now() / 1000), onProgress } = {}) {
   const results = [];
   let cursor = null;
   let done = false;
+  let page = 0;
 
   while (!done) {
+    page++;
     const variables = { first: PAGE_SIZE, ...(cursor && { after: cursor }) };
     const data = await doQuery(apiKey, TX_QUERY, variables);
 
@@ -125,6 +128,7 @@ export async function fetchBlinkTransactions(apiKey, walletId, { from = 0, to = 
       results.push({ id: tx.id, time: tx.createdAt, amount, fee: Math.abs(Number(tx.settlementFee)) });
     }
 
+    if (typeof onProgress === 'function') onProgress({ page, fetched: results.length });
     if (!pageInfo.hasNextPage || done) break;
     cursor = pageInfo.endCursor;
   }
